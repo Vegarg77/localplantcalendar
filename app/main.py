@@ -1,0 +1,596 @@
+"""HTTP API + static single-page app."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+import os
+import re
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import advisor, dates, db, nitrogen, rotation, services as svc, water
+from .garden import cycle_index
+from .plant_data import FAMILY_COMMON, FAMILY_RETURN_YEARS, FROST_THRESHOLD_F, PROFILES
+from .scheduler import resolve_method
+from .sources import geo
+from .sources.http import SourceError
+from .sources.soil import PRESETS
+
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+STATIC = os.path.join(os.path.dirname(__file__), "static")
+
+app = FastAPI(title="Local Plant Calendar", version="1.0")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.exception_handler(svc.NotConfigured)
+async def _not_configured(_: Request, exc: svc.NotConfigured):
+    return JSONResponse(status_code=409, content={"detail": str(exc), "code": "no_location"})
+
+
+@app.exception_handler(SourceError)
+async def _source_error(_: Request, exc: SourceError):
+    return JSONResponse(status_code=502, content={
+        "detail": f"A data source could not be reached and nothing is cached yet: {exc}",
+        "code": "source"})
+
+
+@app.get("/")
+def index():
+    return FileResponse(os.path.join(STATIC, "index.html"))
+
+
+# ------------------------------------------------------------------ settings
+class SettingsIn(BaseModel):
+    location: dict | None = None
+    frost_risk: float | None = Field(None, ge=0.05, le=0.5)
+    cycle_years: int | None = Field(None, ge=1, le=8)
+    start_year: int | None = Field(None, ge=1990, le=2200)
+    lsf_override: str | None = None
+    fff_override: str | None = None
+
+
+_MD = re.compile(r"^\d{2}-\d{2}$")
+
+
+@app.get("/api/settings")
+def get_settings():
+    s = svc.settings()
+    s["current_cycle_year"] = cycle_index(dt.date.today().year, s)
+    s["today"] = dt.date.today().isoformat()
+    return s
+
+
+@app.put("/api/settings")
+def put_settings(body: SettingsIn):
+    vals = body.model_dump(exclude_unset=True)
+    for k in ("lsf_override", "fff_override"):
+        if vals.get(k) and not _MD.match(vals[k]):
+            raise HTTPException(400, f"{k} must look like MM-DD")
+    if "location" in vals and vals["location"]:
+        loc = vals["location"]
+        if not (-90 <= float(loc.get("lat", 999)) <= 90 and
+                -180 <= float(loc.get("lon", 999)) <= 180):
+            raise HTTPException(400, "location needs valid lat/lon")
+    db.put_settings(vals)
+    svc.invalidate()
+    return get_settings()
+
+
+@app.get("/api/geocode")
+def geocode(q: str = Query(..., min_length=2)):
+    return geo.geocode(q)
+
+
+@app.post("/api/refresh")
+def refresh(what: str = "forecast"):
+    if what == "all":
+        db.cache_clear()
+    else:
+        db.cache_clear("GET https://api.open-meteo.com")
+    svc.invalidate()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------- site
+@app.get("/api/site")
+def site():
+    loc = svc.location()
+    clim = svc.climate()
+    summary = clim.summary()
+    return {"location": loc, "climate": summary, "zone": svc.zone(),
+            "soil": svc.site_soil(), "frost_thresholds": FROST_THRESHOLD_F,
+            "sources": SOURCES}
+
+
+SOURCES = [
+    {"name": "Open-Meteo Forecast API", "url": "https://open-meteo.com/",
+     "use": "16-day forecast, reference evapotranspiration (ET₀), soil temperature, humidity"},
+    {"name": "Open-Meteo Historical Weather (ERA5)",
+     "url": "https://open-meteo.com/en/docs/historical-weather-api",
+     "use": "30 years of daily weather → frost probabilities, normals, degree days"},
+    {"name": "USDA NRCS Soil Data Access (SSURGO)",
+     "url": "https://sdmdataaccess.sc.egov.usda.gov/",
+     "use": "Soil texture, organic matter, pH, water-holding capacity, drainage"},
+    {"name": "ISRIC SoilGrids", "url": "https://soilgrids.org/",
+     "use": "Global soil estimates (fallback when SSURGO has no data)"},
+    {"name": "USDA Plant Hardiness Zone Map via phzmapi.org", "url": "https://phzmapi.org/",
+     "use": "Hardiness zone for your ZIP code"},
+    {"name": "Zippopotam.us", "url": "https://zippopotam.us/", "use": "ZIP → coordinates"},
+    {"name": "FAO-56 Crop Evapotranspiration",
+     "url": "https://www.fao.org/3/x0490e/x0490e00.htm",
+     "use": "Crop coefficients, rooting depth, allowable depletion (built in)"},
+]
+
+
+# -------------------------------------------------------------------- plants
+def _plant_summary(p: dict, w: dict | None) -> dict:
+    return {
+        "id": p["id"], "name": p["name"], "latin": p.get("latin", ""), "family": p["family"],
+        "category": p["category"], "season": p["season"], "frost": p["frost"],
+        "lifecycle": p["lifecycle"], "method": p["method"], "feeder": p["feeder"],
+        "dtm": p["dtm"], "custom": bool(p.get("custom")),
+        "windows": [{"start": x["start"], "end": x["end"], "season": x["season"],
+                     "label": f"{x['start_label']} – {x['end_label']}",
+                     "rec": x["establish"]} for x in (w or {}).get("windows", [])],
+        "reasons": (w or {}).get("reasons", []),
+        "window_method": (w or {}).get("method"),
+    }
+
+
+@app.get("/api/plants")
+def list_plants():
+    plants = svc.plants()
+    try:
+        eng = svc.engine()
+    except svc.NotConfigured:
+        eng = None
+    out = []
+    for p in sorted(plants.values(), key=lambda x: x["name"]):
+        w = None
+        if eng:
+            try:
+                w = eng.windows(p)
+            except Exception:  # noqa: BLE001
+                w = None
+        out.append(_plant_summary(p, w))
+    return {"plants": out, "families": FAMILY_COMMON, "located": eng is not None}
+
+
+@app.get("/api/plants/{pid}")
+def plant_detail(pid: str, dtm: int | None = None):
+    plants = svc.plants()
+    p = plants.get(pid)
+    if not p:
+        raise HTTPException(404, "unknown plant")
+    out = {"plant": p, "family_common": FAMILY_COMMON.get(p["family"], p["family"]),
+           "family_return_years": FAMILY_RETURN_YEARS.get(p["family"]),
+           "frost_threshold_f": FROST_THRESHOLD_F[p["frost"]],
+           "companions": [{"id": c, "name": plants[c]["name"]} for c in p["companions"]
+                          if c in plants],
+           "avoid": [{"id": c, "name": plants[c]["name"]} for c in p["avoid"] if c in plants],
+           "per_sqft": round((12 / max(p["spacing"], 1)) ** 2, 2),
+           "methods": {}}
+    try:
+        eng = svc.engine()
+        methods = ["direct", "transplant"] if p["method"] == "either" and not p.get("special") \
+            else [resolve_method(p, None)]
+        for m in methods:
+            out["methods"][m] = eng.windows(p, m, dtm)
+        out["located"] = True
+    except svc.NotConfigured:
+        out["located"] = False
+    return out
+
+
+class CustomPlantIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    base_id: str | None = None
+    profile: str | None = None
+    latin: str | None = None
+    family: str | None = None
+    overrides: dict = {}
+
+
+ALLOWED_OVERRIDES = {"dtm", "indoor_weeks", "spacing", "row", "germ_min", "germ_max",
+                     "heat_max", "frost", "method", "prefer", "dtm_from", "n_demand",
+                     "feeder", "tips", "category", "season", "succession", "harvest_days",
+                     "grow_min", "root_in", "kc"}
+
+
+@app.post("/api/plants/custom")
+def create_custom(body: CustomPlantIn):
+    if not body.base_id and body.profile not in PROFILES:
+        raise HTTPException(400, "pick a plant to copy or a profile")
+    bad = set(body.overrides) - ALLOWED_OVERRIDES
+    if bad:
+        raise HTTPException(400, f"unsupported fields: {', '.join(sorted(bad))}")
+    slug = re.sub(r"[^a-z0-9]+", "_", body.name.lower()).strip("_") or "plant"
+    pid = f"custom_{slug}"
+    existing = svc.plants()
+    n = 2
+    while pid in existing and not existing[pid].get("custom"):
+        pid = f"custom_{slug}_{n}"
+        n += 1
+    spec = {"id": pid, **body.model_dump()}
+    try:
+        built = svc.build_custom(spec)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"invalid plant: {exc}") from exc
+    db.execute("INSERT INTO custom_plants(id, data) VALUES(?, ?) "
+               "ON CONFLICT(id) DO UPDATE SET data = excluded.data", (pid, json.dumps(spec)))
+    return built
+
+
+@app.delete("/api/plants/custom/{pid}")
+def delete_custom(pid: str):
+    if db.query("SELECT 1 FROM plantings WHERE plant_id = ?", (pid,)):
+        raise HTTPException(409, "this plant is used in your rotation — remove it there first")
+    db.execute("DELETE FROM custom_plants WHERE id = ?", (pid,))
+    return {"ok": True}
+
+
+@app.get("/api/profiles")
+def profiles():
+    return {"profiles": {k: {"category": v["category"], "season": v["season"]}
+                         for k, v in PROFILES.items()},
+            "families": sorted(FAMILY_COMMON)}
+
+
+# ---------------------------------------------------------------------- beds
+class BedIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    length_ft: float = Field(8, gt=0, le=1000)
+    width_ft: float = Field(4, gt=0, le=1000)
+    kind: str = Field("raised", pattern="^(raised|in_ground|container)$")
+    soil: dict = {}
+    mulched: bool = False
+    initial_no3_ppm: float = Field(10, ge=0, le=200)
+    notes: str = ""
+    sort: int = 0
+
+
+def _bed_out(b: dict) -> dict:
+    return {**b, "area_sqft": b["length_ft"] * b["width_ft"], "soil_profile": svc.bed_soil(b)}
+
+
+@app.get("/api/beds")
+def list_beds():
+    return {"beds": [_bed_out(b) for b in svc.beds()], "presets": {
+        k: (v["name"] if v else "Native soil at your location") for k, v in PRESETS.items()}}
+
+
+@app.post("/api/beds")
+def create_bed(body: BedIn):
+    soil = dict(body.soil)
+    if not soil.get("preset"):
+        soil["preset"] = {"raised": "raised_mix", "container": "container_mix"}.get(
+            body.kind, "native")
+    bid = db.execute(
+        "INSERT INTO beds(name, length_ft, width_ft, kind, soil, mulched, initial_no3_ppm, "
+        "notes, sort) VALUES(?,?,?,?,?,?,?,?,?)",
+        (body.name, body.length_ft, body.width_ft, body.kind, json.dumps(soil),
+         int(body.mulched), body.initial_no3_ppm, body.notes, body.sort))
+    return _bed_out(next(b for b in svc.beds() if b["id"] == bid))
+
+
+@app.put("/api/beds/{bid}")
+def update_bed(bid: int, body: BedIn):
+    if not db.query("SELECT 1 FROM beds WHERE id = ?", (bid,)):
+        raise HTTPException(404, "unknown bed")
+    db.execute("UPDATE beds SET name=?, length_ft=?, width_ft=?, kind=?, soil=?, mulched=?, "
+               "initial_no3_ppm=?, notes=?, sort=? WHERE id=?",
+               (body.name, body.length_ft, body.width_ft, body.kind, json.dumps(body.soil),
+                int(body.mulched), body.initial_no3_ppm, body.notes, body.sort, bid))
+    return _bed_out(next(b for b in svc.beds() if b["id"] == bid))
+
+
+@app.delete("/api/beds/{bid}")
+def delete_bed(bid: int):
+    db.execute("DELETE FROM beds WHERE id = ?", (bid,))
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------- plantings
+class PlantingIn(BaseModel):
+    bed_id: int
+    plant_id: str
+    cycle_year: int = Field(1, ge=1, le=8)
+    doy: int | None = Field(None, ge=0, le=729)
+    date: str | None = None          # alternative to doy: "YYYY-MM-DD" or "MM-DD"
+    method: str | None = None
+    area_sqft: float = Field(0, ge=0)
+    successions: int = Field(1, ge=1, le=12)
+    dtm_override: int | None = Field(None, ge=10, le=400)
+    residue: str | None = Field(None, pattern="^(remove|incorporate)$")
+    notes: str = ""
+
+
+def _normalize_planting(body: PlantingIn) -> dict:
+    plants = svc.plants()
+    p = plants.get(body.plant_id)
+    if not p:
+        raise HTTPException(400, "unknown plant")
+    if not db.query("SELECT 1 FROM beds WHERE id = ?", (body.bed_id,)):
+        raise HTTPException(400, "unknown bed")
+    s = svc.settings()
+    if body.cycle_year > int(s["cycle_years"]):
+        raise HTTPException(400, f"your rotation cycle has {s['cycle_years']} years")
+    method = resolve_method(p, body.method)
+    doy = body.doy
+    if doy is None and body.date:
+        doy = dates.month_day_to_idx(body.date)
+    if doy is None:
+        w = svc.engine().windows(p, method, body.dtm_override)
+        if not w["windows"]:
+            raise HTTPException(400, f"{p['name']} has no planting window at your location "
+                                     f"({'; '.join(w['reasons'])}). Pick a date manually.")
+        doy = w["windows"][0]["establish"]
+    residue = body.residue or ("incorporate" if p["category"] == "cover" else "remove")
+    return {"bed_id": body.bed_id, "plant_id": body.plant_id, "cycle_year": body.cycle_year,
+            "doy": int(doy), "method": method, "area_sqft": body.area_sqft,
+            "successions": body.successions, "dtm_override": body.dtm_override,
+            "residue": residue, "notes": body.notes}
+
+
+@app.get("/api/plantings")
+def list_plantings():
+    return {"plantings": svc.plantings()}
+
+
+@app.post("/api/plantings")
+def create_planting(body: PlantingIn):
+    v = _normalize_planting(body)
+    pid = db.execute(
+        "INSERT INTO plantings(bed_id, plant_id, cycle_year, doy, method, area_sqft, "
+        "successions, dtm_override, residue, notes) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        tuple(v.values()))
+    return db.query("SELECT * FROM plantings WHERE id = ?", (pid,))[0]
+
+
+@app.put("/api/plantings/{pid}")
+def update_planting(pid: int, body: PlantingIn):
+    if not db.query("SELECT 1 FROM plantings WHERE id = ?", (pid,)):
+        raise HTTPException(404, "unknown planting")
+    v = _normalize_planting(body)
+    db.execute("UPDATE plantings SET bed_id=?, plant_id=?, cycle_year=?, doy=?, method=?, "
+               "area_sqft=?, successions=?, dtm_override=?, residue=?, notes=? WHERE id=?",
+               (*v.values(), pid))
+    return db.query("SELECT * FROM plantings WHERE id = ?", (pid,))[0]
+
+
+@app.delete("/api/plantings/{pid}")
+def delete_planting(pid: int):
+    db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
+    return {"ok": True}
+
+
+class ActualIn(BaseModel):
+    year: int
+    established: str | None = None
+    finished: str | None = None
+
+
+@app.put("/api/plantings/{pid}/actual")
+def set_actual(pid: int, body: ActualIn):
+    for v in (body.established, body.finished):
+        if v:
+            dates.parse(v)
+    db.execute("INSERT INTO actuals(planting_id, year, established, finished) VALUES(?,?,?,?) "
+               "ON CONFLICT(planting_id, year) DO UPDATE SET established=excluded.established, "
+               "finished=excluded.finished", (pid, body.year, body.established, body.finished))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------- amendments/water
+class AmendmentIn(BaseModel):
+    bed_id: int
+    cycle_year: int = Field(1, ge=1, le=8)
+    date: str                       # "MM-DD" (repeats every cycle)
+    product: str
+    amount_lb: float = Field(..., gt=0)
+    n_pct: float | None = Field(None, ge=0, le=60)
+    notes: str = ""
+
+
+@app.get("/api/products")
+def products():
+    return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3]}
+            for k, v in nitrogen.PRODUCTS.items()}
+
+
+@app.get("/api/amendments")
+def list_amendments():
+    return {"amendments": svc.amendments()}
+
+
+@app.post("/api/amendments")
+def create_amendment(body: AmendmentIn):
+    if body.product not in nitrogen.PRODUCTS and body.n_pct is None:
+        raise HTTPException(400, "custom products need an N %")
+    aid = db.execute("INSERT INTO amendments(bed_id, cycle_year, doy, product, amount_lb, "
+                     "n_pct, notes) VALUES(?,?,?,?,?,?,?)",
+                     (body.bed_id, body.cycle_year, dates.month_day_to_idx(body.date),
+                      body.product, body.amount_lb, body.n_pct, body.notes))
+    return db.query("SELECT * FROM amendments WHERE id = ?", (aid,))[0]
+
+
+@app.delete("/api/amendments/{aid}")
+def delete_amendment(aid: int):
+    db.execute("DELETE FROM amendments WHERE id = ?", (aid,))
+    return {"ok": True}
+
+
+class WateringIn(BaseModel):
+    bed_id: int
+    date: str
+    inches: float = Field(..., gt=0, le=10)
+
+
+@app.post("/api/waterings")
+def log_watering(body: WateringIn):
+    dates.parse(body.date)
+    db.execute("INSERT INTO waterings(bed_id, date, inches) VALUES(?,?,?)",
+               (body.bed_id, body.date[:10], body.inches))
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ rotation
+@app.get("/api/rotation")
+def get_rotation():
+    s = svc.settings()
+    beds = svc.beds()
+    plants = svc.plants()
+    pls = svc.plantings()
+    insts = svc.cycle_instances()
+    clim = svc.climate()
+    winter = clim.frost_dates(32)["frost_free_years"] < len(clim.years) / 2
+    chk = rotation.check(beds, pls, plants, s, insts, winter)
+    by_pl: dict[int, list] = {}
+    for i in insts:
+        by_pl.setdefault(i.planting["id"], []).append(i.to_dict())
+    rows = []
+    for b in beds:
+        cells = []
+        for c in range(1, int(s["cycle_years"]) + 1):
+            items = []
+            for pl in pls:
+                p = plants.get(pl["plant_id"])
+                if pl["bed_id"] != b["id"] or not p:
+                    continue
+                if pl["cycle_year"] != c and p["lifecycle"] != "perennial":
+                    continue
+                items.append({**pl, "name": p["name"], "family": p["family"],
+                              "category": p["category"], "feeder": p["feeder"],
+                              "lifecycle": p["lifecycle"],
+                              "instances": by_pl.get(pl["id"], [])})
+            cells.append({"cycle_year": c, "calendar_year": int(s["start_year"]) + c - 1,
+                          "plantings": items, **chk["grid"][b["id"]][c]})
+        rows.append({"bed": _bed_out(b), "cells": cells})
+    return {"rows": rows, "issues": chk["issues"], "groups": chk["groups"],
+            "cycle_years": s["cycle_years"], "start_year": s["start_year"],
+            "current_cycle_year": cycle_index(dt.date.today().year, s),
+            "family_common": FAMILY_COMMON}
+
+
+# ------------------------------------------------------------------ calendar
+@app.get("/api/calendar")
+def calendar(year: int | None = None):
+    year = year or dt.date.today().year
+    s = svc.settings()
+    beds = {b["id"]: b for b in svc.beds()}
+    insts = svc.touching_instances(year)
+    events, rows = [], []
+    for i in insts:
+        d = i.to_dict()
+        d["bed"] = beds.get(i.planting["bed_id"], {}).get("name")
+        rows.append(d)
+        name = i.plant["name"]
+        verb = {"transplant": "Transplant", "direct": "Sow"}.get(i.method, "Plant")
+        if i.kind in ("overwinter", "perennial", "winterkill"):
+            verb = "Plant"
+        if i.indoor_start:
+            events.append({"date": i.indoor_start[0].isoformat(), "type": "indoor",
+                           "title": f"Start {name} indoors", "bed": d["bed"],
+                           "detail": f"between {i.indoor_start[0]:%b %d} and "
+                                     f"{i.indoor_start[1]:%b %d}"})
+        if i.harden_off:
+            events.append({"date": i.harden_off.isoformat(), "type": "harden",
+                           "title": f"Harden off {name}", "bed": d["bed"]})
+        if i.establish:
+            events.append({"date": i.establish.isoformat(), "type": "plant",
+                           "title": f"{verb} {name}"
+                                    + (f" (succession {i.succession + 1})" if i.succession else ""),
+                           "bed": d["bed"],
+                           "detail": f"{i.area:.0f} sq ft"})
+        if i.plant["category"] == "cover":
+            events.append({"date": i.harvest_end.isoformat(), "type": "terminate",
+                           "title": f"Terminate {name}" if i.kind != "winterkill"
+                           else f"{name} winter-kills", "bed": d["bed"]})
+        elif i.harvest_this_year:
+            events.append({"date": i.maturity.isoformat(), "type": "harvest",
+                           "title": f"Harvest {name}", "bed": d["bed"],
+                           "detail": f"through {i.harvest_end:%b %d}"})
+    cyc = cycle_index(year, s)
+    for a in svc.amendments():
+        if a["cycle_year"] == cyc:
+            prod = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
+            events.append({"date": dates.to_date(year, a["doy"]).isoformat(),
+                           "type": "amend", "title": f"Apply {a['amount_lb']:g} lb {prod}",
+                           "bed": beds.get(a["bed_id"], {}).get("name")})
+    events = [e for e in events if e["date"].startswith(str(year))]
+    events.sort(key=lambda e: e["date"])
+    rows.sort(key=lambda r: (r["bed"] or "", r["start"]))
+    clim = svc.climate()
+    fd = clim.frost_dates(32)
+    return {"year": year, "cycle_year": cyc, "events": events, "rows": rows,
+            "frost": {"last_spring": dates.to_date(year, fd["spring"]["0.5"]).isoformat()
+                      if fd["spring"]["0.5"] is not None else None,
+                      "first_fall": dates.to_date(year, fd["fall"]["0.5"]).isoformat()
+                      if fd["fall"]["0.5"] is not None else None}}
+
+
+# ------------------------------------------------------------------ forecast
+@app.get("/api/forecast")
+def get_forecast():
+    today = dt.date.today()
+    fc = svc.forecast()
+    clim = svc.climate()
+    beds = svc.beds()
+    bed_map = {b["id"]: b for b in beds}
+    insts = svc.touching_instances(today.year)
+    if today.month >= 10:
+        insts += [i for i in svc.year_instances(today.year + 1)
+                  if i.start <= today + dt.timedelta(days=30)]
+    advice = advisor.advise(insts, fc, clim, bed_map, today)
+    logs: dict[int, dict[str, float]] = {}
+    for r in db.query("SELECT bed_id, date, SUM(inches) AS inches FROM waterings "
+                      "GROUP BY bed_id, date"):
+        logs.setdefault(r["bed_id"], {})[r["date"]] = r["inches"]
+    watering = []
+    for b in beds:
+        bi = [i for i in insts if i.planting["bed_id"] == b["id"]]
+        watering.append(water.schedule(b, svc.bed_soil(b), bi, fc["days"],
+                                       logs.get(b["id"], {}), today))
+    t = dates.doy(today)
+    normals = {"high": round(float(clim.tmax[t]), 1), "low": round(float(clim.tmin[t]), 1),
+               "soil": round(float(clim.soil[t]), 1)}
+    return {"days": [d for d in fc["days"] if d["date"] >= (today - dt.timedelta(7)).isoformat()],
+            "today": today.isoformat(), "normals": normals, **advice,
+            "watering": watering,
+            "plant_now": advisor.plant_now(svc.engine(), list(svc.plants().values()), today)}
+
+
+# ------------------------------------------------------------------ nitrogen
+@app.get("/api/nitrogen/{bid}")
+def get_nitrogen(bid: int, cycles: int = Query(2, ge=1, le=4)):
+    s = svc.settings()
+    bed = next((b for b in svc.beds() if b["id"] == bid), None)
+    if not bed:
+        raise HTTPException(404, "unknown bed")
+    years = min(max(int(s["cycle_years"]) * cycles, 2), 12)
+    start = int(s["start_year"])
+    insts = []
+    for y in range(start - 1, start + years):
+        insts.extend(i for i in svc.year_instances(y) if i.planting["bed_id"] == bid)
+    insts = [i for i in insts if i.end.year >= start]
+    amend = [a for a in svc.amendments() if a["bed_id"] == bid]
+    return nitrogen.simulate(bed, svc.bed_soil(bed), insts, amend, svc.climate(), start, years,
+                             s, lambda y: cycle_index(y, s))
+
+
+@app.get("/api/nitrogen")
+def nitrogen_overview():
+    out = []
+    for b in svc.beds():
+        r = get_nitrogen(b["id"], 1)
+        out.append({"bed_id": b["id"], "bed": b["name"], "recommendations":
+                    r["recommendations"], "start_om_pct": r["start_om_pct"],
+                    "end_om_pct": r["end_om_pct"],
+                    "years": r["years"]})
+    return {"beds": out}

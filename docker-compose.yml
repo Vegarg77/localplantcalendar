@@ -1,0 +1,12 @@
+services:
+  plantcal:
+    build: .
+    image: localplantcalendar:latest
+    container_name: plantcal
+    ports:
+      - "8080:8080"          # open http://<server-ip>:8080 on your network
+    volumes:
+      - ./data:/data         # your garden plan + cached weather/soil data
+    environment:
+      - TZ=America/Denver    # set to your time zone
+    restart: unless-stopped
