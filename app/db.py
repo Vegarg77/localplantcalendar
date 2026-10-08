@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS waterings (
     inches REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS custom_plants (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS foods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    food_id TEXT NOT NULL,
+    amount_lb REAL,
+    verdict TEXT NOT NULL,
+    assessment TEXT NOT NULL,
+    planting_ids TEXT NOT NULL DEFAULT '[]',
+    created TEXT NOT NULL
+);
 """
 
 _conn: sqlite3.Connection | None = None

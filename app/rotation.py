@@ -152,22 +152,25 @@ def check(beds: list[dict], plantings: list[dict], plants: dict, settings: dict,
                    plants.get(pl["plant_id"], {}).get("lifecycle") == "perennial"
                    for pl in plantings):
                 continue
+            bare = []
             for c in range(1, n + 1):
                 insts = [i for i in instances if i.planting["bed_id"] == bed["id"]
                          and i.planting["cycle_year"] == c]
                 if not insts:
                     continue
-                year = insts[0].year
-                dec = dt.date(year, 12, 15)
+                dec = dt.date(insts[0].year, 12, 15)
                 if not any(i.active_on(dec) for i in instances
                            if i.planting["bed_id"] == bed["id"]):
-                    issues.append({
-                        "severity": "info", "kind": "cover", "bed_id": bed["id"],
-                        "cycle_year": c,
-                        "text": f"{bed['name']}: bare over winter after year {c}. A cover "
-                                "crop (cereal rye, hairy vetch, crimson clover or oats) "
-                                "protects soil and holds or adds nitrogen.",
-                    })
+                    bare.append(c)
+            if bare:
+                issues.append({
+                    "severity": "info", "kind": "cover", "bed_id": bed["id"],
+                    "cycle_year": bare[0],
+                    "text": f"{bed['name']}: bare over winter after year"
+                            f"{'s' if len(bare) > 1 else ''} {', '.join(map(str, bare))}. A "
+                            "cover crop protects the soil and holds or adds nitrogen — use "
+                            "“Add winter cover crops” to fill these automatically.",
+                })
 
     # 6. plan dates outside the climate window
     for inst in instances:

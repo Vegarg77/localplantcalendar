@@ -125,7 +125,14 @@ export async function renderPlant(pid) {
         p.custom ? h('button', { class: 'danger', onclick: async () => {
           await api(`/plants/custom/${p.id}`, { method: 'DELETE' }); invalidate(); location.hash = '#/plants';
         } }, 'Delete custom plant') : null,
-        h('button', { class: 'primary', onclick: () => plantingDialog({ plantId: p.id, onSaved: () => { location.hash = '#/rotation'; } }) }, 'Add to my rotation'))),
+        h('button', { onclick: () => plantingDialog({ plantId: p.id, onSaved: () => { location.hash = '#/rotation'; } }) }, 'Place it myself'),
+        d.food_id ? h('button', { class: 'primary', onclick: async (e) => {
+          e.target.disabled = true; e.target.textContent = 'Planning…';
+          try {
+            await api('/foods/mine', { method: 'POST', body: { food_id: d.food_id } });
+            invalidate(); location.hash = '#/';
+          } catch (err) { e.target.disabled = false; e.target.textContent = 'Plan it for me'; alert(err.message); }
+        } }, 'Plan it for me') : null)),
     p.tips ? h('div', { class: 'card' }, h('p', { style: { margin: 0 } }, p.tips)) : null,
     h('div', { class: 'grid grid-2' },
       h('div', { class: 'card stack' }, h('h2', {}, 'When to plant at your location'), windows),

@@ -1,6 +1,7 @@
 import { api, cached, invalidate } from '../api.js';
 import { h, fmtDate, FEEDER, statusIcon, select, toast } from '../ui.js';
 import { plantingDialog } from './planting-modal.js';
+import { coverCrops } from './food.js';
 import { rerender } from '../app.js';
 
 export async function renderRotation() {
@@ -19,6 +20,7 @@ export async function renderRotation() {
     h('div', {}, h('h1', {}, 'Rotation plan'),
       h('p', {}, `Each bed follows a ${n}-year cycle that repeats. Year 1 = ${rot.start_year}; this year is cycle year ${rot.current_cycle_year}.`)),
     h('div', { class: 'row' }, yearsSel, h('label', { class: 'check' }, 'Year 1 is', startIn),
+      h('button', { onclick: coverCrops }, 'Add winter cover crops'),
       h('button', { class: 'primary', onclick: () => plantingDialog({ onSaved: rerender }) }, 'Add planting')));
 
   const legend = h('div', { class: 'legend' }, Object.values(FEEDER).map((f) =>

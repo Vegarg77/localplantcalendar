@@ -1,6 +1,19 @@
 # Local Plant Calendar
 
-A self-hosted garden planner for your home network. Tell it where your garden is and what's in each bed, and it works out:
+A self-hosted garden planner for your home network, built around **the food you want to eat**.
+
+Type a food, such as "pinto beans", "salsa", "french fries" or "strawberries", and the app does the work:
+
+1. It figures out the crop and variety (refried beans → bush pinto bean such as 'Othello', ~85 days).
+2. It checks your climate. Perennials are checked against your hardiness zone. For annuals it tries the usual method, then starting indoors or direct sowing instead, then a faster variety, then row cover. If none of that works, it says the food isn't suitable and explains why (for example "Avocado survives only to zone 9b; you're zone 6a"). It then suggests what would work, such as a container you bring indoors.
+3. It checks each bed's soil (pH, heavy clay, drainage, organic matter) and gives lime, sulfur or compost amounts where the soil is fixable.
+4. It sizes the planting from how much you eat ("5 lb of dried beans a year" → ~70 sq ft).
+5. It places the crop in your rotation every year of the cycle. Each year it goes in a different bed, keeping plant families apart long enough, in a bed with free space during its season, after a good preceding crop. If there isn't room, it says how much more bed space you'd need.
+6. It writes a dated growing guide for your location: variety, soil prep, start-indoors and planting dates, spacing, weekly water at peak, feeding (from the nitrogen model), harvest and processing.
+
+Dish bundles (salsa, pesto, three sisters, chili, tacos…) add every ingredient at once. "Add winter cover crops" fills beds that would sit bare over winter, using a legume ahead of heavy feeders and a nitrogen catch crop otherwise.
+
+Under the hood it works out:
 
 - **When to plant**: planting windows for 140+ vegetables, herbs, fruits, flowers and cover crops, from 30 years of your local weather. Includes indoor seed-starting dates, hardening off, transplanting, succession sowings and expected harvest windows.
 - **How the forecast affects things**: frost, freeze and heat alerts for what's actually in the ground, plus go/wait advice on sowing (soil temperature, frost, washout rain). It also flags disease-favourable weather and re-projects harvest dates from actual temperatures.
@@ -33,15 +46,19 @@ Python 3.11+. Set `PLANTCAL_DB=/path/to/plantcal.db` to choose where data is sto
 
 ## First steps
 
-1. **Setup**: enter your ZIP code. The first load downloads 30 years of daily weather for your spot (a few seconds), then caches it.
-2. **Setup → Beds**: add each bed with its size. Raised beds default to a compost-rich mix. In-ground beds use the USDA soil survey for your location. Enter soil-test numbers (OM %, pH, nitrate) when you have them.
-3. **Plants**: browse or search, open a plant, and use **Add to my rotation** to pick the bed, the rotation year and a planting window.
-4. **Rotation** shows the multi-year plan and its warnings. **Calendar** is the year's schedule. **Today** is the daily dashboard. **Soil & N** shows each bed's nitrogen and organic-matter projection.
+1. Open the app and enter your ZIP code. The first load downloads 30 years of daily weather for your spot (a few seconds).
+2. Describe your garden, for example "3 raised beds, 8×4 ft". Raised beds default to a compost-rich mix; in-ground beds use the USDA soil survey for your location. You can add soil-test numbers later in **Setup**.
+3. On **My food**, type what you want to eat, optionally add how many pounds a year, and press **Grow it**.
+4. **Today** is the daily dashboard (alerts, go/wait, watering). **Calendar** is the year's schedule. **Rotation** shows and edits the multi-year plan. **Soil & N** has the nitrogen and organic-matter projections. **Plants** is the full library; use **Plan it for me** or **Place it myself** there.
 
 ## How it works
 
 | Question | Method | Data |
 |---|---|---|
+| Food → crop | ~150 foods, dishes and products mapped to crops and varieties, with typical yields per sq ft; every edible plant in the library is also searchable | `app/food_data.py` |
+| Can it grow here? | Zone range for perennials; for annuals the planting-window engine below, retried with the other method, a faster variety, and row cover | — |
+| Soil fit | pH vs. crop range (lime/sulfur rates by soil texture), clay for root crops, drainage, organic matter for heavy feeders | Bed soil profile |
+| Where & when | Every rotation year: beds scored on soil fit, plant-family return interval (hard rule), preceding crop group, companions and free space during the crop's season | Your beds & plantings |
 | Frost dates & risk | Per-year last/first frost at 32/28/24/15 °F → empirical probabilities (10/30/50/90 %) | Open-Meteo Historical (ERA5), 31 years of daily data |
 | Planting windows | Each day of the year is scored for (1) reaching maturity before season end, (2) frost risk for the crop's hardiness during its vulnerable period, (3) germination soil temperature, (4) warmth to establish, (5) heat at maturity (bolting, poor fruit set). Contiguous good days become windows. | Climatology above + plant parameters |
 | Days to maturity | Growing degree days with crop-specific base temperature, calibrated so seed-packet DTM holds in a ~68 °F (warm crops) / ~60 °F (cool crops) mean day | Normals, plus actual temperatures for crops in the ground |
@@ -63,6 +80,7 @@ Responses are cached in SQLite, and the app keeps working on stale data if a ser
 
 ## Adding plants
 
+- To make a food searchable by another name, add an `F(...)` line to `app/food_data.py` (aliases, yield, variety tip).
 - In the app, open any plant and choose **Make a custom variety**. It copies the plant and lets you change days to maturity, spacing, frost tolerance, heat limit and N demand to match your seed packet.
 - For a planting, the **Days to maturity** field in the rotation dialog overrides the default.
 - To add to the built-in library, add a `P(...)` line to `app/plant_data.py`. Pick the closest profile and override what differs; the field reference is at the top of the file.
@@ -83,4 +101,4 @@ pytest -q
 
 The tests run fully offline against synthetic Open-Meteo, SSURGO and SoilGrids responses in `tests/fixtures.py`, which mimic five US climates.
 
-Layout: `app/main.py` (API), `app/scheduler.py` (planting windows), `app/climate.py` (frost & normals), `app/water.py`, `app/nitrogen.py`, `app/rotation.py`, `app/advisor.py` (forecast advice), `app/sources/` (data fetchers), `app/static/` (vanilla-JS UI with no build step).
+Layout: `app/main.py` (API), `app/foods.py` + `app/food_data.py` (food-first planner), `app/scheduler.py` (planting windows), `app/climate.py` (frost & normals), `app/water.py`, `app/nitrogen.py`, `app/rotation.py`, `app/advisor.py` (forecast advice), `app/sources/` (data fetchers), `app/static/` (vanilla-JS UI with no build step).

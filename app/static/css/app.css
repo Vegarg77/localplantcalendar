@@ -265,3 +265,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   .topbar, button { display: none !important; }
   .card { box-shadow: none; }
 }
+
+/* ------------------------------------------------------------- food-first */
+.hero h1 { font-size: 1.7rem; }
+.search.big { font-size: 1.1rem; padding: .7rem .8rem; width: 100%; }
+.search-wrap { position: relative; }
+.suggest-list { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); max-height: 340px; overflow-y: auto; }
+.suggest-item { display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
+  border-bottom: 1px solid var(--border); padding: .55rem .8rem; background: transparent; }
+.suggest-item:hover, .suggest-item:focus { background: var(--surface-2); }
+.food-card h2 { margin-bottom: .15rem; }
+.reasons { margin: 0; padding-left: 1.2rem; color: var(--ink-2); }
+.steps { margin: .5rem 0 0; padding-left: 1.3rem; }
+.steps li { margin-bottom: .45rem; }
+details > summary { cursor: pointer; }

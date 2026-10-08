@@ -8,7 +8,7 @@ import json
 import threading
 
 from . import climate as climate_mod
-from . import db
+from . import db, nitrogen
 from .garden import cycle_index, instances_for_year, instances_touching
 from .plant_data import PROFILES, builtin_plants
 from .scheduler import Engine
@@ -184,3 +184,19 @@ def cycle_instances():
 
 def current_cycle_year() -> int:
     return cycle_index(dt.date.today().year, settings())
+
+
+def nitrogen_for_bed(bed_id: int, cycles: int = 2) -> dict:
+    s = settings()
+    bed = next((b for b in beds() if b["id"] == bed_id), None)
+    if not bed:
+        raise KeyError(bed_id)
+    years = min(max(int(s["cycle_years"]) * cycles, 2), 12)
+    start = int(s["start_year"])
+    insts = []
+    for y in range(start - 1, start + years):
+        insts.extend(i for i in year_instances(y) if i.planting["bed_id"] == bed_id)
+    insts = [i for i in insts if i.end.year >= start]
+    amend = [a for a in amendments() if a["bed_id"] == bed_id]
+    return nitrogen.simulate(bed, bed_soil(bed), insts, amend, climate(), start, years, s,
+                             lambda y: cycle_index(y, s))

@@ -41,6 +41,10 @@ special        anchor-based timing for overwintering crops & perennials:
                 "first_harvest_year": n}
                anchors: "lsf" (median last spring frost), "fff" (median first
                fall frost), "lsf+1" (next year's last spring frost)
+zone           (min, max) USDA hardiness zones for perennials (6.5 = zone 6b);
+               below min winters kill it, above max there is too little chill
+soil_pref      "loose" for root/tuber crops that deform or rot in heavy clay
+container_ok   perennial that can live in a pot and overwinter indoors
 """
 
 from __future__ import annotations
@@ -260,6 +264,9 @@ FAMILY_COMMON = {
     "Aizoaceae": "Ice plant family", "Basellaceae": "Basella", "Montiaceae": "Miner's lettuce",
     "Caprifoliaceae": "Honeysuckle family (mâche)", "Asparagaceae": "Asparagus family",
     "Plantaginaceae": "Plantain family", "Zingiberaceae": "Ginger family",
+    "Lauraceae": "Laurel family (avocado)", "Rutaceae": "Citrus family",
+    "Oleaceae": "Olive family", "Lythraceae": "Pomegranate family",
+    "Musaceae": "Banana family", "Anacardiaceae": "Cashew family (mango)",
 }
 
 FROST_THRESHOLD_F = {"tender": 32, "semi": 28, "hardy": 24, "very_hardy": 15}
@@ -938,6 +945,90 @@ P("berseem_clover", "Berseem clover", "Trifolium alexandrinum", "Fabaceae", "coo
   category="cover", dtm=[50, 70], harvest_days=14, n_fix=80, n_demand=10,
   residue_frac=1.0, heat_max=None,
   tips="Fast annual clover for spring or fall; winter-kills below ~20°F.")
+
+# ------------------------------------------------------- dry legumes (pulses)
+P("dry_bean", "Bean (dry: pinto, black, kidney…)", "Phaseolus vulgaris", "Fabaceae",
+  "warm_legume", dtm=[85, 105], harvest_days=21, succession=None, spacing=4, row=24,
+  n_fix=40, heat_stress=95, kc=[0.4, 1.15, 0.35],
+  companions=["sweet_corn", "popcorn", "winter_squash", "carrot", "marigold"],
+  avoid=["onion_bulb", "garlic", "leek", "chives", "fennel_bulb"],
+  tips="Grown like bush snap beans, but leave the pods on the plant until they are dry and "
+       "papery and the beans rattle. If rain threatens at the end, pull whole plants and "
+       "finish drying them under cover. Thresh, then freeze the dried beans for 48 hours to "
+       "kill weevils.")
+P("chickpea", "Chickpea (garbanzo)", "Cicer arietinum", "Fabaceae", "cool_legume",
+  frost="semi", dtm=[90, 110], harvest_days=14, germ_min=45, germ_max=85, heat_max=92,
+  spacing=4, row=18, n_fix=40, kc=[0.4, 1.0, 0.35], p=0.5,
+  tips="Likes dry summers: wet weather while pods fill causes blight. Harvest when plants "
+       "turn tan and pods rattle; each pod holds 1–2 seeds, so yields are modest.")
+P("lentil", "Lentil", "Lens culinaris", "Fabaceae", "cool_legume",
+  dtm=[80, 110], harvest_days=14, heat_max=90, spacing=1, row=12, n_fix=40,
+  kc=[0.4, 1.1, 0.3], p=0.5,
+  tips="A dryland crop: sow in early spring, harvest when the lower pods turn brown and "
+       "rattle. Tiny yields per plant — best as a fun patch rather than a pantry supply.")
+
+# ------------------------------------------------------- subtropical fruit
+P("avocado", "Avocado", "Persea americana", "Lauraceae", "fruit", frost="tender",
+  spacing=240, row=240, kc=[0.6, 0.85, 0.75],
+  special={"plant": ("lsf", 14, "lsf", 60), "harvest": ("fff", -60, "fff", 90),
+           "kind": "perennial", "first_harvest_year": 4},
+  tips="Needs near frost-free winters (Mexican types survive ~20°F, most others ~30°F) "
+       "and perfect drainage — root rot kills avocados in wet soil.")
+P("lemon", "Lemon / Lime (citrus)", "Citrus × limon", "Rutaceae", "fruit", frost="semi",
+  spacing=144, row=144, kc=[0.6, 0.7, 0.7], ph=[6.0, 7.0],
+  special={"plant": ("lsf", 7, "lsf", 60), "harvest": ("fff", 0, "fff", 120),
+           "kind": "perennial", "first_harvest_year": 3},
+  tips="Meyer lemons are the hardiest (to ~25°F) and do well in a large pot you bring "
+       "inside for winter. Limes are the most cold-tender citrus.")
+P("orange", "Orange / Mandarin", "Citrus × sinensis", "Rutaceae", "fruit", frost="semi",
+  spacing=180, row=180, kc=[0.6, 0.7, 0.7], ph=[6.0, 7.0],
+  special={"plant": ("lsf", 7, "lsf", 60), "harvest": ("fff", 30, "fff", 150),
+           "kind": "perennial", "first_harvest_year": 3},
+  tips="Satsuma mandarins are the most cold-hardy (to ~20°F). Fruit sweetens on the tree.")
+P("olive", "Olive", "Olea europaea", "Oleaceae", "fruit", frost="hardy",
+  spacing=240, row=240, kc=[0.5, 0.65, 0.65], ph=[6.5, 8.0],
+  special={"plant": ("lsf", 0, "lsf", 45), "harvest": ("fff", -30, "fff", 45),
+           "kind": "perennial", "first_harvest_year": 4},
+  tips="Needs long hot summers and mild winters (hardy to ~15°F). Raw olives must be "
+       "cured before eating.")
+P("pomegranate", "Pomegranate", "Punica granatum", "Lythraceae", "fruit", frost="hardy",
+  spacing=144, row=144, kc=[0.4, 0.7, 0.6],
+  special={"plant": ("lsf", 0, "lsf", 45), "harvest": ("fff", -45, "fff", 0),
+           "kind": "perennial", "first_harvest_year": 3},
+  tips="Loves heat and tolerates drought and alkaline soil; Russian varieties survive ~5°F.")
+P("banana", "Banana", "Musa acuminata", "Musaceae", "fruit", frost="tender",
+  spacing=120, row=120, kc=[0.6, 1.1, 1.0], root_in=24,
+  special={"plant": ("lsf", 14, "lsf", 60), "harvest": ("lsf", 300, "lsf", 400),
+           "kind": "perennial", "first_harvest_year": 2},
+  tips="Fruit needs 10–15 frost-free months; in cooler zones plants grow but rarely ripen.")
+P("mango", "Mango", "Mangifera indica", "Anacardiaceae", "fruit", frost="tender",
+  spacing=300, row=300, kc=[0.5, 0.8, 0.7],
+  special={"plant": ("lsf", 14, "lsf", 60), "harvest": ("lsf", 120, "lsf", 200),
+           "kind": "perennial", "first_harvest_year": 4},
+  tips="Tropical: damaged below ~30°F and needs a dry spell to flower.")
+
+# ---------------------------------------------------- climate & soil fit
+ZONES = {
+    "asparagus": (3, 8), "rhubarb": (3, 8), "artichoke": (7, 11), "horseradish": (3, 9),
+    "jerusalem_artichoke": (3, 9), "strawberry": (3, 10), "raspberry": (3, 9),
+    "blackberry": (5, 10), "blueberry": (4, 7.5), "grape": (4, 10), "apple": (3, 8.5),
+    "pear": (4, 9), "peach": (5, 9), "cherry": (4, 8), "plum": (4, 9), "fig": (7, 11),
+    "oregano": (5, 10), "thyme": (5, 9), "sage": (5, 9), "rosemary": (7, 10),
+    "mint": (3, 9), "lemon_balm": (4, 9), "catnip": (3, 9), "lavender": (5, 9),
+    "hyssop": (4, 9), "tarragon": (4, 8), "chives": (3, 9), "garlic_chives": (4, 9),
+    "sorrel": (4, 9), "white_clover": (3, 10), "avocado": (9.5, 11), "lemon": (9, 11),
+    "orange": (9, 11), "olive": (8, 11), "pomegranate": (7.5, 11), "banana": (9.5, 12),
+    "mango": (10, 12),
+}
+LOOSE_SOIL = {"carrot", "parsnip", "potato", "sweet_potato", "peanut", "radish", "daikon",
+              "salsify", "horseradish", "celeriac", "garlic", "shallot", "onion_bulb",
+              "onion_sets", "leek", "beet", "rutabaga", "turnip", "ginger", "avocado"}
+CONTAINER_OK = {"fig", "lemon", "orange", "rosemary", "banana", "lemongrass", "mint",
+                "strawberry", "blueberry", "olive", "pomegranate", "avocado", "artichoke"}
+for _p in _PLANTS:
+    _p["zone"] = ZONES.get(_p["id"])
+    _p["soil_pref"] = "loose" if _p["id"] in LOOSE_SOIL else "any"
+    _p["container_ok"] = _p["id"] in CONTAINER_OK
 
 
 def builtin_plants() -> list[dict]:

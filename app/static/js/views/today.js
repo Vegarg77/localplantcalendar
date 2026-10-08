@@ -40,7 +40,7 @@ export async function renderToday() {
   const tasks = h('div', { class: 'card' }, h('h2', {}, 'Next two weeks'));
   if (!fc.tasks.length) {
     tasks.append(h('p', { class: 'muted' }, 'No sowing, transplanting or harvests scheduled in the next two weeks. ',
-      h('a', { href: '#/plants' }, 'Browse plants'), ' to add crops to your rotation.'));
+      h('a', { href: '#/' }, 'Tell me what you want to eat'), ' and I’ll schedule it.'));
   }
   for (const t of fc.tasks) {
     const sev = t.kind === 'plant' ? (t.verdict === 'go' ? 'good' : 'warn') : 'info';

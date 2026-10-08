@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import advisor, dates, db, nitrogen, rotation, services as svc, water
+from . import advisor, dates, db, foods, nitrogen, rotation, services as svc, water
 from .garden import cycle_index
 from .plant_data import FAMILY_COMMON, FAMILY_RETURN_YEARS, FROST_THRESHOLD_F, PROFILES
 from .scheduler import resolve_method
@@ -175,6 +175,8 @@ def plant_detail(pid: str, dtm: int | None = None):
                           if c in plants],
            "avoid": [{"id": c, "name": plants[c]["name"]} for c in p["avoid"] if c in plants],
            "per_sqft": round((12 / max(p["spacing"], 1)) ** 2, 2),
+           "food_id": next((f["id"] for f in foods.catalog(plants) if f["plant_id"] == pid),
+                           None),
            "methods": {}}
     try:
         eng = svc.engine()
@@ -569,19 +571,10 @@ def get_forecast():
 # ------------------------------------------------------------------ nitrogen
 @app.get("/api/nitrogen/{bid}")
 def get_nitrogen(bid: int, cycles: int = Query(2, ge=1, le=4)):
-    s = svc.settings()
-    bed = next((b for b in svc.beds() if b["id"] == bid), None)
-    if not bed:
-        raise HTTPException(404, "unknown bed")
-    years = min(max(int(s["cycle_years"]) * cycles, 2), 12)
-    start = int(s["start_year"])
-    insts = []
-    for y in range(start - 1, start + years):
-        insts.extend(i for i in svc.year_instances(y) if i.planting["bed_id"] == bid)
-    insts = [i for i in insts if i.end.year >= start]
-    amend = [a for a in svc.amendments() if a["bed_id"] == bid]
-    return nitrogen.simulate(bed, svc.bed_soil(bed), insts, amend, svc.climate(), start, years,
-                             s, lambda y: cycle_index(y, s))
+    try:
+        return svc.nitrogen_for_bed(bid, cycles)
+    except KeyError:
+        raise HTTPException(404, "unknown bed") from None
 
 
 @app.get("/api/nitrogen")
@@ -594,3 +587,108 @@ def nitrogen_overview():
                     "end_om_pct": r["end_om_pct"],
                     "years": r["years"]})
     return {"beds": out}
+
+
+# --------------------------------------------------------------- food-first
+class FoodIn(BaseModel):
+    food_id: str
+    amount_lb: float | None = Field(None, gt=0, le=10000)
+
+
+def _food_row(r: dict) -> dict:
+    ids = json.loads(r["planting_ids"])
+    alive = {x["id"] for x in db.query(
+        f"SELECT id FROM plantings WHERE id IN ({','.join('?' * len(ids))})", tuple(ids))} \
+        if ids else set()
+    return {"id": r["id"], "food_id": r["food_id"], "amount_lb": r["amount_lb"],
+            "verdict": r["verdict"], "created": r["created"],
+            "planting_ids": [i for i in ids if i in alive],
+            "removed_plantings": len(ids) - len(alive),
+            "assessment": json.loads(r["assessment"])}
+
+
+@app.get("/api/foods/search")
+def food_search(q: str = Query(..., min_length=1)):
+    return foods.search(q, svc.plants())
+
+
+@app.get("/api/foods/bundles")
+def food_bundles():
+    return foods.bundle_list()
+
+
+@app.post("/api/foods/assess")
+def food_assess(body: FoodIn):
+    try:
+        return foods.assess(body.food_id, body.amount_lb)
+    except KeyError:
+        raise HTTPException(404, "unknown food") from None
+
+
+@app.get("/api/foods/mine")
+def my_foods():
+    return {"foods": [_food_row(r) for r in db.query("SELECT * FROM foods ORDER BY id DESC")]}
+
+
+def _grow(food_id: str, amount_lb: float | None) -> dict:
+    """Assess a food and, if it can grow here, put it into the rotation."""
+    # re-planning replaces the earlier plan for the same food
+    for old in db.query("SELECT * FROM foods WHERE food_id = ?", (food_id,)):
+        for pid in json.loads(old["planting_ids"]):
+            db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
+        db.execute("DELETE FROM foods WHERE id = ?", (old["id"],))
+    try:
+        ctx = foods.Ctx()
+        res = foods.assess(food_id, amount_lb, ctx)
+    except KeyError:
+        raise HTTPException(404, "unknown food") from None
+    ids: list[int] = []
+    if res["verdict"] in ("good", "fixable", "marginal", "partial") and res["placements"]:
+        food = foods.resolve(food_id, ctx.plants)
+        ids = foods.apply(res, food, ctx)
+        feed = foods.feeding_advice(ids)
+        if feed:
+            res["steps"].insert(-1, {"title": "Feed", "text": " ".join(feed)})
+    fid = db.execute("INSERT INTO foods(food_id, amount_lb, verdict, assessment, planting_ids, "
+                     "created) VALUES(?,?,?,?,?,?)",
+                     (food_id, amount_lb, res["verdict"], json.dumps(res), json.dumps(ids),
+                      dt.date.today().isoformat()))
+    return _food_row(db.query("SELECT * FROM foods WHERE id = ?", (fid,))[0])
+
+
+@app.post("/api/foods/mine")
+def grow_food(body: FoodIn):
+    return _grow(body.food_id, body.amount_lb)
+
+
+@app.post("/api/foods/mine/{fid}/replan")
+def replan_food(fid: int, body: FoodIn | None = None):
+    row = db.query("SELECT * FROM foods WHERE id = ?", (fid,))
+    if not row:
+        raise HTTPException(404, "unknown food")
+    amount = body.amount_lb if body else row[0]["amount_lb"]
+    return _grow(row[0]["food_id"], amount)
+
+
+@app.delete("/api/foods/mine/{fid}")
+def delete_food(fid: int, keep_plantings: bool = False):
+    row = db.query("SELECT * FROM foods WHERE id = ?", (fid,))
+    if row and not keep_plantings:
+        for pid in json.loads(row[0]["planting_ids"]):
+            db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
+    db.execute("DELETE FROM foods WHERE id = ?", (fid,))
+    return {"ok": True}
+
+
+@app.post("/api/foods/bundle/{bid}")
+def grow_bundle(bid: str):
+    bundle = next((b for b in foods.bundle_list() if b["id"] == bid), None)
+    if not bundle:
+        raise HTTPException(404, "unknown bundle")
+    existing = {r["food_id"] for r in db.query("SELECT food_id FROM foods")}
+    return {"foods": [_grow(f, None) for f in bundle["foods"] if f not in existing]}
+
+
+@app.post("/api/rotation/cover-crops")
+def add_cover_crops():
+    return {"added": foods.fill_cover_crops()}
