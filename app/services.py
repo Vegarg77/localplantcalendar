@@ -200,3 +200,27 @@ def nitrogen_for_bed(bed_id: int, cycles: int = 2) -> dict:
     amend = [a for a in amendments() if a["bed_id"] == bed_id]
     return nitrogen.simulate(bed, bed_soil(bed), insts, amend, climate(), start, years, s,
                              lambda y: cycle_index(y, s))
+
+
+def forecast_context(today: dt.date | None = None) -> dict:
+    """Forecast + the advice and watering plans derived from it (shared by the
+    Today page and the calendar)."""
+    from . import advisor, water  # local import keeps module start-up light
+    today = today or dt.date.today()
+    fc = forecast()
+    clim = climate()
+    bs = beds()
+    bed_map = {b["id"]: b for b in bs}
+    insts = touching_instances(today.year)
+    if today.month >= 10:
+        insts += [i for i in year_instances(today.year + 1)
+                  if i.start <= today + dt.timedelta(days=30)]
+    advice = advisor.advise(insts, fc, clim, bed_map, today)
+    logs: dict[int, dict[str, float]] = {}
+    for r in db.query("SELECT bed_id, date, SUM(inches) AS inches FROM waterings "
+                      "GROUP BY bed_id, date"):
+        logs.setdefault(r["bed_id"], {})[r["date"]] = r["inches"]
+    watering = [water.schedule(b, bed_soil(b), [i for i in insts if i.planting["bed_id"] == b["id"]],
+                               fc["days"], logs.get(b["id"], {}), today) for b in bs]
+    return {"today": today, "forecast": fc, "instances": insts, "advice": advice,
+            "watering": watering}

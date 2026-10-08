@@ -11,7 +11,16 @@ const EVENT_LABEL = {
   terminate: 'Cover crop', amend: 'Amend soil',
 };
 
-export async function renderCalendar(yearArg) {
+export function viewToggle(active, ym) {
+  const now = new Date();
+  const month = ym || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const views = [['month', 'Month', `#/calendar/${month}`], ['agenda', 'Agenda', '#/calendar/agenda'],
+    ['timeline', 'Timeline', `#/calendar/timeline/${month.slice(0, 4)}`]];
+  return h('div', { class: 'segmented', role: 'tablist' }, views.map(([k, label, href]) =>
+    h('a', { href, role: 'tab', class: k === active ? 'on' : '', 'aria-selected': String(k === active) }, label)));
+}
+
+export async function renderTimeline(yearArg) {
   const year = Number(yearArg) || new Date().getFullYear();
   const cal = await cached(`/calendar?year=${year}`);
   const start = new Date(year, 0, 1);
@@ -22,11 +31,12 @@ export async function renderCalendar(yearArg) {
   };
 
   const head = h('div', { class: 'page-head' },
-    h('div', {}, h('h1', {}, `${year} garden calendar`),
+    h('div', {}, h('h1', {}, `${year} timeline`),
       h('p', {}, `Rotation year ${cal.cycle_year}. Dates come from your planting plan and local climate; mark plantings on the Today page to re-time them.`)),
     h('div', { class: 'row' },
-      h('a', { class: 'btn', href: `#/calendar/${year - 1}` }, `← ${year - 1}`),
-      h('a', { class: 'btn', href: `#/calendar/${year + 1}` }, `${year + 1} →`),
+      viewToggle('timeline', `${year}-01`),
+      h('a', { class: 'btn', href: `#/calendar/timeline/${year - 1}` }, `← ${year - 1}`),
+      h('a', { class: 'btn', href: `#/calendar/timeline/${year + 1}` }, `${year + 1} →`),
       h('button', { onclick: () => window.print() }, 'Print')));
 
   const legend = h('div', { class: 'legend' },

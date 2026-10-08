@@ -9,11 +9,11 @@ import os
 import re
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import advisor, dates, db, foods, nitrogen, rotation, services as svc, water
+from . import advisor, calendar_events, dates, db, foods, nitrogen, rotation, services as svc
 from .garden import cycle_index
 from .plant_data import FAMILY_COMMON, FAMILY_RETURN_YEARS, FROST_THRESHOLD_F, PROFILES
 from .scheduler import resolve_method
@@ -384,8 +384,9 @@ def set_actual(pid: int, body: ActualIn):
         if v:
             dates.parse(v)
     db.execute("INSERT INTO actuals(planting_id, year, established, finished) VALUES(?,?,?,?) "
-               "ON CONFLICT(planting_id, year) DO UPDATE SET established=excluded.established, "
-               "finished=excluded.finished", (pid, body.year, body.established, body.finished))
+               "ON CONFLICT(planting_id, year) DO UPDATE SET "
+               "established=COALESCE(excluded.established, actuals.established), "
+               "finished=COALESCE(excluded.finished, actuals.finished)", (pid, body.year, body.established, body.finished))
     return {"ok": True}
 
 
@@ -540,25 +541,9 @@ def calendar(year: int | None = None):
 # ------------------------------------------------------------------ forecast
 @app.get("/api/forecast")
 def get_forecast():
-    today = dt.date.today()
-    fc = svc.forecast()
+    ctx = svc.forecast_context()
+    today, fc, advice, watering = ctx["today"], ctx["forecast"], ctx["advice"], ctx["watering"]
     clim = svc.climate()
-    beds = svc.beds()
-    bed_map = {b["id"]: b for b in beds}
-    insts = svc.touching_instances(today.year)
-    if today.month >= 10:
-        insts += [i for i in svc.year_instances(today.year + 1)
-                  if i.start <= today + dt.timedelta(days=30)]
-    advice = advisor.advise(insts, fc, clim, bed_map, today)
-    logs: dict[int, dict[str, float]] = {}
-    for r in db.query("SELECT bed_id, date, SUM(inches) AS inches FROM waterings "
-                      "GROUP BY bed_id, date"):
-        logs.setdefault(r["bed_id"], {})[r["date"]] = r["inches"]
-    watering = []
-    for b in beds:
-        bi = [i for i in insts if i.planting["bed_id"] == b["id"]]
-        watering.append(water.schedule(b, svc.bed_soil(b), bi, fc["days"],
-                                       logs.get(b["id"], {}), today))
     t = dates.doy(today)
     normals = {"high": round(float(clim.tmax[t]), 1), "low": round(float(clim.tmin[t]), 1),
                "soil": round(float(clim.soil[t]), 1)}
@@ -692,3 +677,22 @@ def grow_bundle(bid: str):
 @app.post("/api/rotation/cover-crops")
 def add_cover_crops():
     return {"added": foods.fill_cover_crops()}
+
+
+# ------------------------------------------------------------- calendar views
+@app.get("/api/calendar/events")
+def calendar_range(start: str, end: str, forecast: bool = True):
+    try:
+        d0, d1 = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(400, "start/end must be YYYY-MM-DD") from None
+    if d1 < d0 or (d1 - d0).days > 400:
+        raise HTTPException(400, "range must be 0–400 days")
+    return calendar_events.build(d0, d1, include_forecast=forecast)
+
+
+@app.get("/api/calendar.ics")
+def calendar_ics(kinds: str | None = None, bed: int | None = None):
+    wanted = {k for k in (kinds or "").split(",") if k in calendar_events.KINDS} or None
+    return Response(calendar_events.ics(wanted, bed), media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": 'inline; filename="garden.ics"'})

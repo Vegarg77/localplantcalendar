@@ -3,7 +3,7 @@ import { renderToday } from './views/today.js';
 import { renderFood } from './views/food.js';
 import { renderPlants, renderPlant } from './views/plants.js';
 import { renderRotation } from './views/rotation.js';
-import { renderCalendar } from './views/calendar.js';
+import { renderCalendar } from './views/month.js';
 import { renderSoil } from './views/soil.js';
 import { renderSetup } from './views/setup.js';
 
@@ -13,7 +13,7 @@ const routes = [
   [/^#\/plants\/([\w-]+)$/, 'plants', renderPlant],
   [/^#\/plants$/, 'plants', renderPlants],
   [/^#\/rotation$/, 'rotation', renderRotation],
-  [/^#\/calendar(?:\/(\d{4}))?$/, 'calendar', renderCalendar],
+  [/^#\/calendar(?:\/([\w/-]+))?$/, 'calendar', renderCalendar],
   [/^#\/soil(?:\/(\d+))?$/, 'soil', renderSoil],
   [/^#\/setup$/, 'setup', renderSetup],
 ];

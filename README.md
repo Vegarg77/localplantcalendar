@@ -49,7 +49,7 @@ Python 3.11+. Set `PLANTCAL_DB=/path/to/plantcal.db` to choose where data is sto
 1. Open the app and enter your ZIP code. The first load downloads 30 years of daily weather for your spot (a few seconds).
 2. Describe your garden, for example "3 raised beds, 8×4 ft". Raised beds default to a compost-rich mix; in-ground beds use the USDA soil survey for your location. You can add soil-test numbers later in **Setup**.
 3. On **My food**, type what you want to eat, optionally add how many pounds a year, and press **Grow it**.
-4. **Today** is the daily dashboard (alerts, go/wait, watering). **Calendar** is the year's schedule. **Rotation** shows and edits the multi-year plan. **Soil & N** has the nitrogen and organic-matter projections. **Plants** is the full library; use **Plan it for me** or **Place it myself** there.
+4. **Today** is the daily dashboard (alerts, go/wait, watering). **Calendar** has three views. **Month** is a real calendar grid: start-indoors, harden-off, sow/transplant (each succession), harvest windows, last harvests, cover-crop cut-down, soil amendments, and average and 1-in-10 frost dates. For the next 16 days it also shows the forecast high/low, frost and heat alerts, "wait" advice and per-bed watering; click a day for details and "I planted this / I watered" buttons. **Agenda** lists the next 90 days. **Timeline** is the year as a Gantt chart. Filters by bed and event type are remembered. **Rotation** shows and edits the multi-year plan. **Soil & N** has the nitrogen and organic-matter projections. **Plants** is the full library; use **Plan it for me** or **Place it myself** there.
 
 ## How it works
 
@@ -78,6 +78,10 @@ Python 3.11+. Set `PLANTCAL_DB=/path/to/plantcal.db` to choose where data is sto
 
 Responses are cached in SQLite, and the app keeps working on stale data if a service is briefly down.
 
+## Your garden in your phone's calendar
+
+**Calendar → Add to my phone calendar** gives a subscription address (`http://<server>:8080/api/calendar.ics`, optionally filtered by `?kinds=plant,harvest&bed=2`). Subscribe to it from Apple Calendar (iPhone: Settings → Calendar → Accounts → Add Subscribed Calendar), Outlook or Thunderbird. Every planting, transplant and harvest window then appears as an all-day event and updates as your plan changes. Your devices refresh it whenever they can reach the server on your network. Google Calendar can't reach a home server, so download the `.ics` file and import it instead.
+
 ## Adding plants
 
 - To make a food searchable by another name, add an `F(...)` line to `app/food_data.py` (aliases, yield, variety tip).
@@ -101,4 +105,4 @@ pytest -q
 
 The tests run fully offline against synthetic Open-Meteo, SSURGO and SoilGrids responses in `tests/fixtures.py`, which mimic five US climates.
 
-Layout: `app/main.py` (API), `app/foods.py` + `app/food_data.py` (food-first planner), `app/scheduler.py` (planting windows), `app/climate.py` (frost & normals), `app/water.py`, `app/nitrogen.py`, `app/rotation.py`, `app/advisor.py` (forecast advice), `app/sources/` (data fetchers), `app/static/` (vanilla-JS UI with no build step).
+Layout: `app/main.py` (API), `app/foods.py` + `app/food_data.py` (food-first planner), `app/calendar_events.py` (calendar + iCal feed), `app/scheduler.py` (planting windows), `app/climate.py` (frost & normals), `app/water.py`, `app/nitrogen.py`, `app/rotation.py`, `app/advisor.py` (forecast advice), `app/sources/` (data fetchers), `app/static/` (vanilla-JS UI with no build step).

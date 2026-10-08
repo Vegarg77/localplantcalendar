@@ -281,3 +281,40 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .steps { margin: .5rem 0 0; padding-left: 1.3rem; }
 .steps li { margin-bottom: .45rem; }
 details > summary { cursor: pointer; }
+
+/* ------------------------------------------------------------ month view */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.segmented a { padding: .42rem .8rem; color: var(--ink-2); text-decoration: none; font-weight: 500; }
+.segmented a + a { border-left: 1px solid var(--border); }
+.segmented a.on { background: var(--accent-wash); color: var(--accent); }
+.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.mg-head { font-size: .75rem; font-weight: 600; color: var(--ink-2); padding: 0 .3rem; }
+.mg-cell { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-height: 108px;
+  padding: .3rem .35rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  text-align: left; cursor: pointer; font: inherit; color: var(--ink); min-width: 0; }
+.mg-cell:hover { background: var(--surface-2); }
+.mg-cell.out { opacity: .5; }
+.mg-cell.today { box-shadow: 0 0 0 2px var(--accent) inset; }
+.mg-cell.sel { background: var(--accent-wash); }
+.mg-top { display: flex; justify-content: space-between; align-items: baseline; gap: .2rem; }
+.mg-num { font-weight: 650; font-size: .9rem; }
+.mg-wx { font-size: .68rem; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mg-wx.frost { color: var(--critical-text); font-weight: 600; }
+.mg-rain { color: var(--s1); }
+.mg-events { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-ev { display: flex; align-items: center; gap: .3rem; font-size: .72rem; line-height: 1.25; min-width: 0; }
+.mg-ev .key { width: 8px; height: 8px; border-radius: 2px; }
+.mg-ev .status svg { width: 10px; height: 10px; }
+.mg-ev-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-more, .mg-harv { font-size: .68rem; color: var(--muted); }
+.mg-harv { margin-top: auto; }
+.day-panel h2 { margin: 0; }
+.agenda-day h3 { margin: 0 0 .2rem; }
+@media (max-width: 760px) {
+  .month-grid { gap: 2px; }
+  .mg-head { text-align: center; padding: 0; font-size: .68rem; }
+  .mg-cell { min-height: 58px; padding: .2rem; border-radius: 6px; }
+  .mg-wx, .mg-ev-t, .mg-more, .mg-harv { display: none; }
+  .mg-events { flex-direction: row; flex-wrap: wrap; gap: 3px; }
+  .mg-top { justify-content: center; }
+}
