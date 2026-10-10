@@ -98,3 +98,25 @@ def test_stale_cache_survives_outage(located, monkeypatch):
     monkeypatch.setattr(http, "FETCH", down)
     # TTLs have not expired, so nothing is refetched; force expiry by clearing memory only
     assert located.get("/api/site").status_code == 200
+
+
+def test_old_database_gets_the_auto_bed_column(tmp_path, monkeypatch):
+    import sqlite3
+
+    from app import db
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE beds (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+                "length_ft REAL NOT NULL DEFAULT 8, width_ft REAL NOT NULL DEFAULT 4, "
+                "kind TEXT NOT NULL DEFAULT 'raised', soil TEXT NOT NULL DEFAULT '{}', "
+                "mulched INTEGER NOT NULL DEFAULT 0, initial_no3_ppm REAL NOT NULL DEFAULT 10, "
+                "notes TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0)")
+    old.execute("INSERT INTO beds(name) VALUES('Bed 1')")
+    old.commit()
+    old.close()
+    monkeypatch.setenv("PLANTCAL_DB", str(path))
+    db.reset()
+    try:
+        assert db.query("SELECT name, auto FROM beds") == [{"name": "Bed 1", "auto": 0}]
+    finally:
+        db.reset()

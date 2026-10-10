@@ -133,7 +133,22 @@ def beds() -> list[dict]:
     for r in rows:
         r["soil"] = json.loads(r["soil"] or "{}")
         r["mulched"] = bool(r["mulched"])
+        r["auto"] = bool(r["auto"])
     return rows
+
+
+def add_bed(name: str, length_ft: float, width_ft: float, kind: str = "raised",
+            soil: dict | None = None, mulched: bool = False, initial_no3_ppm: float = 10,
+            notes: str = "", sort: int = 0, auto: bool = False) -> int:
+    soil = dict(soil or {})
+    if not soil.get("preset"):
+        soil["preset"] = {"raised": "raised_mix", "container": "container_mix"}.get(
+            kind, "native")
+    return db.execute(
+        "INSERT INTO beds(name, length_ft, width_ft, kind, soil, mulched, initial_no3_ppm, "
+        "notes, sort, auto) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (name, length_ft, width_ft, kind, json.dumps(soil), int(mulched), initial_no3_ppm,
+         notes, sort, int(auto)))
 
 
 def bed_soil(bed: dict) -> dict:

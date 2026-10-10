@@ -18,6 +18,7 @@ The heavy lifting:
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 import unicodedata
 
@@ -144,6 +145,9 @@ class Ctx:
         self.current_cycle = cycle_index(dt.date.today().year, self.settings)
         z = svc.zone()
         self.zone = zone_number(z["zone"]) if z else None
+        # garden sizing: add beds when a food doesn't fit (on unless turned off)
+        self.auto = self.settings.get("auto_size") is not False
+        self.template = self.settings.get("auto_bed") or db.DEFAULT_SETTINGS["auto_bed"]
         self._years: dict[int, list] = {}
 
     def instances(self, year: int):
@@ -381,6 +385,10 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
     largest = max((b["length_ft"] * b["width_ft"] for b in ctx.beds), default=0.0)
     min_area = min(max(plant_area(p), 4.0, 0.25 * per_window), per_window, largest)
     any_ok_soil = any(s["fit"] != "poor" for s in soils.values())
+    max_beds = 3
+    if ctx.auto:  # beds are added to fit, so a big planting may span more of them
+        t_area = ctx.template["length_ft"] * ctx.template["width_ft"]
+        max_beds = max(3, math.ceil(per_window / t_area) + 1)
     tentative, placements, problems, short = [], [], [], []
     missing = 0.0
     for cyc in years:
@@ -394,6 +402,12 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
                 if sf == "poor" and any_ok_soil:
                     continue
                 free = _free_area(ctx, bed, s, e, year, tentative)
+                if perennial:  # it stays put, so it needs the room every year of the cycle
+                    for y in range(ctx.start, ctx.start + ctx.n):
+                        if y != year:
+                            ys = dates.to_date(y, plan["establish"])
+                            ye = dates.to_date(y, plan["harvest_end"])
+                            free = min(free, _free_area(ctx, bed, ys, ye, y, tentative))
                 if free + 1e-6 < min_area:
                     continue
                 score = {"good": 3, "fixable": 1, "poor": -4}[sf]
@@ -410,7 +424,7 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
             cands.sort(key=lambda c: (c[0], c[1]), reverse=True)
             used = 0
             for score, _, bed, free, gap in cands:
-                if remaining <= 0.5 or used >= 3:
+                if remaining <= 0.5 or used >= max_beds:
                     break
                 a = round(min(remaining, free), 1)
                 if a < min_area and a < remaining - 0.5:
@@ -431,6 +445,7 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
             if remaining > max(0.5, 0.1 * per_window):
                 missing = max(missing, remaining)
                 short.append((year, remaining, w["season"].lower()))
+    total_short = sum(r for _, r, _ in short)
     if short:
         yrs = [str(y) for y, _, _ in short]
         when = yrs[0] if len(yrs) == 1 else ", ".join(yrs[:-1]) + " and " + yrs[-1]
@@ -440,7 +455,7 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
             f"{' & '.join(sorted({s for _, _, s in short}))} planting without breaking the "
             f"{FAMILY_COMMON.get(p['family'], p['family']).lower()} rotation or crowding other "
             "crops.")
-    return placements, problems, missing
+    return placements, problems, missing, total_short
 
 
 # ---------------------------------------------------------------- assess
@@ -479,7 +494,7 @@ def assess(food_id: str, amount_lb: float | None = None, ctx: Ctx | None = None)
                 "reasons": sorted({i for s in soils.values() for i in s["issues"]}),
                 "workaround": " ".join(fixes), "placements": [], "steps": []}
     area, how = area_for(food, p, amount_lb)
-    placements, problems, missing = place(food, p, fit, soils, area, ctx)
+    placements, problems, missing, total_short = place(food, p, fit, soils, area, ctx)
     verdict = fit["status"]
     if any(pl["soil_fit"] != "good" for pl in placements) and verdict == "good":
         verdict = "fixable"
@@ -500,6 +515,7 @@ def assess(food_id: str, amount_lb: float | None = None, ctx: Ctx | None = None)
     }[verdict]
     out = {**base, "verdict": verdict, "headline": headline, "reasons": problems,
            "workaround": fit.get("workaround"), "area_needed": round(area, 1),
+           "area_missing": round(total_short, 1),   # across every year that's short
            "area_basis": how, "area_per_year": round(yearly, 1),
            "expected_yield": expected, "unit": food["unit"],
            "placements": [_placement_out(pl, p) for pl in placements]}
@@ -540,6 +556,57 @@ def _placement_out(pl: dict, p: dict) -> dict:
             "establish": pl["start"].isoformat(), "harvest_end": pl["end"].isoformat(),
             "maturity": dates.to_date(pl["calendar_year"], plan["maturity"]).isoformat(),
             "soil_fit": pl["soil_fit"]}
+
+
+# ----------------------------------------------------------- garden sizing
+SHORT_OF_SPACE = {"partial", "no_space", "needs_beds"}
+
+
+def assess_sized(food_id: str, amount_lb: float | None = None) -> tuple[dict, Ctx, int]:
+    """Assess a food; with garden sizing on, add beds (from the bed template)
+    until it fits. Returns the assessment, its context and how many beds were
+    added. Beds that end up unused are removed by ``prune_auto_beds``."""
+    ctx = Ctx()
+    res = assess(food_id, amount_lb, ctx)
+    added = 0
+    if not ctx.auto:
+        return res, ctx, added
+    t = ctx.template
+    bed_area = t["length_ft"] * t["width_ft"]
+    for _ in range(6):
+        if res["verdict"] not in SHORT_OF_SPACE:
+            break
+        missing = res.get("area_missing") or bed_area
+        n = max(1, math.ceil(missing / bed_area - 0.05))
+        names = _next_bed_names(n)
+        for name in names:
+            svc.add_bed(name, t["length_ft"], t["width_ft"], t["kind"], auto=True)
+        added += n
+        ctx = Ctx()
+        new = assess(food_id, amount_lb, ctx)
+        stuck = (new["verdict"] in SHORT_OF_SPACE and res["verdict"] != "needs_beds"
+                 and new.get("area_missing", 0) >= missing - 0.5)
+        res = new
+        if stuck:   # more beds don't help (e.g. the template's soil doesn't suit it)
+            break
+    return res, ctx, added
+
+
+def _next_bed_names(n: int) -> list[str]:
+    nums = [int(m.group(1)) for b in svc.beds() if (m := re.fullmatch(r"Bed (\d+)", b["name"]))]
+    start = max(nums, default=len(svc.beds())) + 1
+    return [f"Bed {start + i}" for i in range(n)]
+
+
+def prune_auto_beds() -> int:
+    """Remove beds the planner added that no longer hold anything (no
+    plantings, and nothing logged against them)."""
+    rows = db.query("SELECT id FROM beds WHERE auto = 1 AND id NOT IN "
+                    "(SELECT bed_id FROM plantings) AND id NOT IN (SELECT bed_id FROM waterings) "
+                    "AND id NOT IN (SELECT bed_id FROM amendments)")
+    for r in rows:
+        db.execute("DELETE FROM beds WHERE id = ?", (r["id"],))
+    return len(rows)
 
 
 # ------------------------------------------------------------------ guide

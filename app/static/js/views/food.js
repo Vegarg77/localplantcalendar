@@ -19,14 +19,16 @@ export async function renderFood() {
   const settings = await api('/settings');
   if (!settings.location) return onboardingLocation();
   const beds = await api('/beds');
-  if (!beds.beds.length) return onboardingBeds();
+  if (!beds.beds.length && settings.auto_size === null) return onboardingGarden();
   const [mine, bundles] = await Promise.all([api('/foods/mine'), api('/foods/bundles')]);
 
   const box = h('div', { class: 'stack' });
-  const hero = searchCard(async (food, amount) => {
+  const sizing = settings.auto_size !== false;
+  const hero = searchCard(sizing, async (food, amount) => {
     const res = await api('/foods/mine', { method: 'POST', body: { food_id: food.id, amount_lb: amount } });
     invalidate();
-    toast(res.planting_ids.length ? `${res.assessment.food.name} added to your rotation` : res.assessment.headline);
+    const extra = res.beds_added ? ` (added ${res.beds_added} bed${res.beds_added > 1 ? 's' : ''})` : '';
+    toast(res.planting_ids.length ? `${res.assessment.food.name} added to your rotation${extra}` : res.assessment.headline);
     rerender();
   });
 
@@ -37,7 +39,8 @@ export async function renderFood() {
       e.target.textContent = `Planning ${b.name}…`;
       try {
         const r = await api(`/foods/bundle/${b.id}`, { method: 'POST' });
-        invalidate(); toast(`${b.name}: planned ${r.foods.length} foods`); rerender();
+        const added = r.foods.reduce((n, f) => n + (f.beds_added || 0), 0);
+        invalidate(); toast(`${b.name}: planned ${r.foods.length} foods${added ? `, added ${added} beds` : ''}`); rerender();
       } catch (err) { toast(err.message); e.target.disabled = false; }
     },
   }, b.name)));
@@ -55,6 +58,7 @@ export async function renderFood() {
     box.append(h('div', { class: 'stats' },
       stat('Foods planned', ok.length, `${not.length} need attention`),
       stat('Expected harvest', `${f0(yieldTotal)} lb/yr`, 'rough garden averages'),
+      gardenStat(beds.beds, sizing),
       stat('Rotation', `${settings.cycle_years}-year cycle`, `this is year ${settings.current_cycle_year}`)));
     box.append(h('div', { class: 'row between' }, h('h2', { class: 'section-title' }, 'Your food'),
       h('button', { onclick: coverCrops }, 'Add winter cover crops')));
@@ -63,13 +67,23 @@ export async function renderFood() {
   return box;
 }
 
+function gardenStat(beds, sizing) {
+  const sqft = beds.reduce((a, b) => a + b.area_sqft, 0);
+  const auto = beds.filter((b) => b.auto).length;
+  const sub = !sizing ? 'your beds; sizing is off' : auto === beds.length ? 'sized for your food'
+    : auto ? `${auto} added for your food` : 'your beds';
+  return h('a', { class: 'stat', href: '#/setup' }, h('div', { class: 'label' }, 'Garden'),
+    h('div', { class: 'value' }, `${beds.length} bed${beds.length === 1 ? '' : 's'} · ${f0(sqft)} sq ft`),
+    h('div', { class: 'sub' }, sub));
+}
+
 function stat(label, value, sub) {
   return h('div', { class: 'stat' }, h('div', { class: 'label' }, label),
     h('div', { class: 'value' }, value), sub ? h('div', { class: 'sub' }, sub) : null);
 }
 
 // -------------------------------------------------------------- search
-function searchCard(onGrow) {
+function searchCard(sizing, onGrow) {
   const input = h('input', { type: 'search', class: 'search big', autocomplete: 'off',
     placeholder: 'What do you want to eat? e.g. pinto beans, salsa, french fries',
     'aria-label': 'Food to grow' });
@@ -118,7 +132,9 @@ function searchCard(onGrow) {
   });
   return h('div', { class: 'card stack hero' },
     h('h1', {}, 'What do you want to eat?'),
-    h('p', { class: 'muted' }, 'Name a food. I’ll check it against your climate and soil, pick the variety and dates, and fit it into your beds every year.'),
+    h('p', { class: 'muted' }, sizing
+      ? 'Name a food, and how much you eat if you know. I’ll check it against your climate and soil, pick the variety and dates, and size the garden to fit it, every year of the rotation.'
+      : 'Name a food. I’ll check it against your climate and soil, pick the variety and dates, and fit it into your beds every year.'),
     h('div', { class: 'search-wrap' }, input, sugg),
     h('div', { class: 'row' }, amount, go), picked);
 }
@@ -230,22 +246,52 @@ function onboardingLocation() {
     h('div', { class: 'row' }, q, h('button', { class: 'primary', onclick: go }, 'Find')), out);
 }
 
-function onboardingBeds() {
-  const count = h('input', { type: 'number', min: 1, max: 30, value: 3, style: { width: '5rem' } });
+export const BED_DEFAULTS = { raised: [8, 4], in_ground: [10, 4], container: [2, 2] };
+
+export function bedKindSelect(value) {
+  return select([{ value: 'raised', label: 'raised beds' }, { value: 'in_ground', label: 'in-ground plots' }, { value: 'container', label: 'large containers' }], value);
+}
+
+function onboardingGarden() {
+  // Path 1: the app works out how many beds the food needs.
+  const kind = bedKindSelect('raised');
   const len = h('input', { type: 'number', min: 1, step: 0.5, value: 8, style: { width: '5rem' } });
   const wid = h('input', { type: 'number', min: 1, step: 0.5, value: 4, style: { width: '5rem' } });
-  const kind = select([{ value: 'raised', label: 'raised beds' }, { value: 'in_ground', label: 'in-ground plots' }, { value: 'container', label: 'large containers' }], 'raised');
-  const go = h('button', { class: 'primary' }, 'Create my beds');
+  kind.addEventListener('change', () => { [len.value, wid.value] = BED_DEFAULTS[kind.value]; });
+  const sizeIt = h('button', { class: 'primary' }, 'Size it for me');
+  sizeIt.onclick = async () => {
+    sizeIt.disabled = true;
+    await api('/settings', { method: 'PUT', body: { auto_size: true,
+      auto_bed: { kind: kind.value, length_ft: Number(len.value) || 8, width_ft: Number(wid.value) || 4 } } });
+    invalidate(); rerender();
+  };
+
+  // Path 2: the user already has beds.
+  const count = h('input', { type: 'number', min: 1, max: 30, value: 3, style: { width: '5rem' } });
+  const mlen = h('input', { type: 'number', min: 1, step: 0.5, value: 8, style: { width: '5rem' } });
+  const mwid = h('input', { type: 'number', min: 1, step: 0.5, value: 4, style: { width: '5rem' } });
+  const mkind = bedKindSelect('raised');
+  mkind.addEventListener('change', () => { [mlen.value, mwid.value] = BED_DEFAULTS[mkind.value]; });
+  const more = h('input', { type: 'checkbox', checked: true });
+  const go = h('button', {}, 'Create my beds');
   go.onclick = async () => {
     go.disabled = true;
     const n = Number(count.value) || 1;
-    for (let i = 1; i <= n; i++) {
-      await api('/beds', { method: 'POST', body: { name: `Bed ${i}`, length_ft: Number(len.value), width_ft: Number(wid.value), kind: kind.value } });
-    }
+    const size = { kind: mkind.value, length_ft: Number(mlen.value), width_ft: Number(mwid.value) };
+    for (let i = 1; i <= n; i++) await api('/beds', { method: 'POST', body: { name: `Bed ${i}`, ...size } });
+    await api('/settings', { method: 'PUT', body: { auto_size: more.checked, auto_bed: size } });
     invalidate(); toast(`${n} beds created`); rerender();
   };
-  return h('div', { class: 'card stack hero' }, h('h1', {}, 'Describe your garden'),
-    h('p', {}, 'Step 2 of 2: the beds or plots you rotate crops through. You can rename, resize or add soil-test results later in Setup.'),
-    h('div', { class: 'row' }, 'I have', count, kind, 'of', len, '×', wid, 'feet'),
-    h('div', {}, go));
+
+  return h('div', { class: 'card stack hero' }, h('h1', {}, 'Your garden'),
+    h('p', {}, 'Step 2 of 2: do you already have beds, or should I work out what your food needs?'),
+    h('div', { class: 'grid grid-2' },
+      h('div', { class: 'stack' }, h('h2', {}, 'Size it for me'),
+        h('p', { class: 'muted' }, 'Tell me what you want to eat, and I’ll work out how many beds that takes, including room to rotate crops.'),
+        h('div', { class: 'row' }, 'Use', kind, 'of', len, '×', wid, 'feet'), h('div', {}, sizeIt)),
+      h('div', { class: 'stack' }, h('h2', {}, 'I already have beds'),
+        h('p', { class: 'muted' }, 'I’ll fit your food into them. You can rename them, resize them or add soil tests later in Setup.'),
+        h('div', { class: 'row' }, 'I have', count, mkind, 'of', mlen, '×', mwid, 'feet'),
+        h('label', { class: 'check' }, more, 'Add more like these if my food doesn’t fit'),
+        h('div', {}, go))));
 }

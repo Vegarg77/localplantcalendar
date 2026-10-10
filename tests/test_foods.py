@@ -79,6 +79,7 @@ def test_unsuitable_foods_are_explained_not_planted(located):
 
 
 def test_too_much_reports_partial(located):
+    located.put("/api/settings", json={"auto_size": False})
     _setup(located, beds=2)
     a = located.post("/api/foods/mine", json={"food_id": "pinto_beans",
                                               "amount_lb": 20}).json()["assessment"]
@@ -108,3 +109,63 @@ def test_bundle_and_cover_crops(located):
     # nothing in the rotation breaks a family return interval
     issues = located.get("/api/rotation").json()["issues"]
     assert not [i for i in issues if i["kind"] == "family"]
+
+
+def _beds(c):
+    return c.get("/api/beds").json()["beds"]
+
+
+def test_no_beds_needed_garden_is_sized_for_you(located):
+    r = located.post("/api/foods/mine", json={"food_id": "pinto_beans", "amount_lb": 2}).json()
+    a = r["assessment"]
+    assert a["verdict"] in ("good", "fixable") and r["planting_ids"]
+    beds = _beds(located)
+    assert beds and all(b["auto"] and b["kind"] == "raised" for b in beds)
+    assert r["beds_added"] == len(beds)
+    # legumes still rotate: a different bed every year of the cycle
+    assert len({p["bed_id"] for p in a["placements"]}) == 3
+
+
+def test_sizing_adds_to_your_beds_and_cleans_up(located):
+    _setup(located, beds=2)
+    item = located.post("/api/foods/mine", json={"food_id": "pinto_beans",
+                                                 "amount_lb": 20}).json()
+    assert item["assessment"]["verdict"] in ("good", "fixable")
+    beds = _beds(located)
+    assert [b["name"] for b in beds if not b["auto"]] == ["Bed 1", "Bed 2"]
+    assert item["beds_added"] == len(beds) - 2 > 0
+    assert len({b["name"] for b in beds}) == len(beds)
+    # removing the food removes the beds the planner added, never yours
+    located.delete(f"/api/foods/mine/{item['id']}")
+    assert [b["name"] for b in _beds(located)] == ["Bed 1", "Bed 2"]
+
+
+def test_bed_template_and_keeping_a_bed(located):
+    located.put("/api/settings", json={"auto_bed": {"kind": "in_ground", "length_ft": 10,
+                                                    "width_ft": 3}})
+    item = located.post("/api/foods/mine", json={"food_id": "carrots"}).json()
+    beds = _beds(located)
+    assert beds and all(b["kind"] == "in_ground" and b["area_sqft"] == 30 for b in beds)
+    kept = beds[0]
+    located.put(f"/api/beds/{kept['id']}", json={"name": "Carrot patch", "length_ft": 10,
+                                                "width_ft": 3, "kind": "in_ground"})
+    located.delete(f"/api/foods/mine/{item['id']}")
+    assert [b["name"] for b in _beds(located)] == ["Carrot patch"]
+
+
+def test_turning_sizing_off_keeps_the_beds(located):
+    located.post("/api/foods/mine", json={"food_id": "carrots"})
+    n = len(_beds(located))
+    located.put("/api/settings", json={"auto_size": False})
+    assert len(_beds(located)) == n and not any(b["auto"] for b in _beds(located))
+    a = located.post("/api/foods/mine", json={"food_id": "pinto_beans",
+                                              "amount_lb": 40}).json()["assessment"]
+    assert a["verdict"] == "partial" and len(_beds(located)) == n
+
+
+def test_perennials_get_room_every_year(located):
+    for f, amt in (("tomatoes", None), ("pinto_beans", 5), ("carrots", None),
+                   ("potatoes", 30), ("strawberries", None)):
+        located.post("/api/foods/mine", json={"food_id": f, "amount_lb": amt})
+    issues = located.get("/api/rotation").json()["issues"]
+    assert not [i for i in issues if i["kind"] in ("space", "family")], issues
