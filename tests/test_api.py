@@ -120,3 +120,9 @@ def test_old_database_gets_the_auto_bed_column(tmp_path, monkeypatch):
         assert db.query("SELECT name, auto FROM beds") == [{"name": "Bed 1", "auto": 0}]
     finally:
         db.reset()
+
+
+def test_app_files_are_revalidated(client):
+    for path in ("/", "/static/js/app.js"):
+        assert client.get(path).headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/api/settings").headers

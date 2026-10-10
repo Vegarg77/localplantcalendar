@@ -28,6 +28,17 @@ app = FastAPI(title="Local Plant Calendar", version="1.0")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def _revalidate_app_files(request: Request, call_next):
+    # The page and its scripts change with every update; without this, browsers
+    # guess a cache lifetime and can keep running the old app for days. The
+    # ETag check makes an unchanged file a cheap 304.
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.exception_handler(svc.NotConfigured)
 async def _not_configured(_: Request, exc: svc.NotConfigured):
     return JSONResponse(status_code=409, content={"detail": str(exc), "code": "no_location"})
