@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS beds (
     mulched INTEGER NOT NULL DEFAULT 0,
     initial_no3_ppm REAL NOT NULL DEFAULT 10,
     notes TEXT NOT NULL DEFAULT '',
-    sort INTEGER NOT NULL DEFAULT 0
+    sort INTEGER NOT NULL DEFAULT 0,
+    auto INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS plantings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,8 +95,16 @@ def _connection() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA foreign_keys = ON")
         _conn.executescript(SCHEMA)
+        _migrate(_conn)
         _path = path
     return _conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(beds)")}
+    if "auto" not in cols:      # beds added by the planner (garden sizing)
+        conn.execute("ALTER TABLE beds ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def reset() -> None:
@@ -137,6 +146,8 @@ DEFAULT_SETTINGS = {
     "start_year": None,        # calendar year that is "cycle year 1"
     "lsf_override": None,      # "MM-DD" local knowledge beats reanalysis
     "fff_override": None,
+    "auto_size": None,         # add beds when food doesn't fit; None = not chosen yet (on)
+    "auto_bed": {"kind": "raised", "length_ft": 8, "width_ft": 4},  # what it adds
 }
 
 

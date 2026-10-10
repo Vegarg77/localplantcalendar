@@ -46,6 +46,12 @@ def index():
 
 
 # ------------------------------------------------------------------ settings
+class AutoBedIn(BaseModel):
+    kind: str = Field("raised", pattern="^(raised|in_ground|container)$")
+    length_ft: float = Field(8, gt=0, le=1000)
+    width_ft: float = Field(4, gt=0, le=1000)
+
+
 class SettingsIn(BaseModel):
     location: dict | None = None
     frost_risk: float | None = Field(None, ge=0.05, le=0.5)
@@ -53,6 +59,8 @@ class SettingsIn(BaseModel):
     start_year: int | None = Field(None, ge=1990, le=2200)
     lsf_override: str | None = None
     fff_override: str | None = None
+    auto_size: bool | None = None
+    auto_bed: AutoBedIn | None = None
 
 
 _MD = re.compile(r"^\d{2}-\d{2}$")
@@ -78,6 +86,8 @@ def put_settings(body: SettingsIn):
                 -180 <= float(loc.get("lon", 999)) <= 180):
             raise HTTPException(400, "location needs valid lat/lon")
     db.put_settings(vals)
+    if vals.get("auto_size") is False:
+        db.execute("UPDATE beds SET auto = 0")   # turning sizing off keeps the beds it made
     svc.invalidate()
     return get_settings()
 
@@ -269,15 +279,7 @@ def list_beds():
 
 @app.post("/api/beds")
 def create_bed(body: BedIn):
-    soil = dict(body.soil)
-    if not soil.get("preset"):
-        soil["preset"] = {"raised": "raised_mix", "container": "container_mix"}.get(
-            body.kind, "native")
-    bid = db.execute(
-        "INSERT INTO beds(name, length_ft, width_ft, kind, soil, mulched, initial_no3_ppm, "
-        "notes, sort) VALUES(?,?,?,?,?,?,?,?,?)",
-        (body.name, body.length_ft, body.width_ft, body.kind, json.dumps(soil),
-         int(body.mulched), body.initial_no3_ppm, body.notes, body.sort))
+    bid = svc.add_bed(**body.model_dump())
     return _bed_out(next(b for b in svc.beds() if b["id"] == bid))
 
 
@@ -285,8 +287,9 @@ def create_bed(body: BedIn):
 def update_bed(bid: int, body: BedIn):
     if not db.query("SELECT 1 FROM beds WHERE id = ?", (bid,)):
         raise HTTPException(404, "unknown bed")
+    # editing a bed the planner added makes it yours: it's no longer removed when empty
     db.execute("UPDATE beds SET name=?, length_ft=?, width_ft=?, kind=?, soil=?, mulched=?, "
-               "initial_no3_ppm=?, notes=?, sort=? WHERE id=?",
+               "initial_no3_ppm=?, notes=?, sort=?, auto=0 WHERE id=?",
                (body.name, body.length_ft, body.width_ft, body.kind, json.dumps(body.soil),
                 int(body.mulched), body.initial_no3_ppm, body.notes, body.sort, bid))
     return _bed_out(next(b for b in svc.beds() if b["id"] == bid))
@@ -623,9 +626,9 @@ def _grow(food_id: str, amount_lb: float | None) -> dict:
             db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
         db.execute("DELETE FROM foods WHERE id = ?", (old["id"],))
     try:
-        ctx = foods.Ctx()
-        res = foods.assess(food_id, amount_lb, ctx)
+        res, ctx, beds_added = foods.assess_sized(food_id, amount_lb)
     except KeyError:
+        foods.prune_auto_beds()
         raise HTTPException(404, "unknown food") from None
     ids: list[int] = []
     if res["verdict"] in ("good", "fixable", "marginal", "partial") and res["placements"]:
@@ -634,11 +637,14 @@ def _grow(food_id: str, amount_lb: float | None) -> dict:
         feed = foods.feeding_advice(ids)
         if feed:
             res["steps"].insert(-1, {"title": "Feed", "text": " ".join(feed)})
+    beds_removed = foods.prune_auto_beds()
     fid = db.execute("INSERT INTO foods(food_id, amount_lb, verdict, assessment, planting_ids, "
                      "created) VALUES(?,?,?,?,?,?)",
                      (food_id, amount_lb, res["verdict"], json.dumps(res), json.dumps(ids),
                       dt.date.today().isoformat()))
-    return _food_row(db.query("SELECT * FROM foods WHERE id = ?", (fid,))[0])
+    out = _food_row(db.query("SELECT * FROM foods WHERE id = ?", (fid,))[0])
+    out["beds_added"] = max(beds_added - beds_removed, 0)
+    return out
 
 
 @app.post("/api/foods/mine")
@@ -662,7 +668,7 @@ def delete_food(fid: int, keep_plantings: bool = False):
         for pid in json.loads(row[0]["planting_ids"]):
             db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
     db.execute("DELETE FROM foods WHERE id = ?", (fid,))
-    return {"ok": True}
+    return {"ok": True, "beds_removed": foods.prune_auto_beds()}
 
 
 @app.post("/api/foods/bundle/{bid}")

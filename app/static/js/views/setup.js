@@ -2,6 +2,7 @@ import { api, cached, invalidate } from '../api.js';
 import { lineChart, columnChart } from '../charts.js';
 import { h, f0, f1, f2, modal, field, select, toast } from '../ui.js';
 import { rerender } from '../app.js';
+import { BED_DEFAULTS, bedKindSelect } from './food.js';
 
 export async function renderSetup() {
   const settings = await api('/settings');
@@ -16,7 +17,7 @@ export async function renderSetup() {
     h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Setup'),
       h('p', {}, 'Location, beds and preferences. Everything else is computed from free public data.'))),
     h('div', { class: 'grid grid-2' }, locationCard(settings, site, siteErr), prefsCard(settings)),
-    bedsCard(beds),
+    bedsCard(beds, settings),
     site ? climateCard(site) : null,
     site ? siteSoilCard(site) : null,
     customCard(plants),
@@ -75,15 +76,19 @@ function prefsCard(s) {
 }
 
 // -------------------------------------------------------------------- beds
-function bedsCard(beds) {
+function bedsCard(beds, settings) {
   const card = h('div', { class: 'card stack' }, h('div', { class: 'row between' }, h('h2', {}, 'Beds'),
     h('button', { class: 'primary', onclick: () => bedDialog(null, beds.presets) }, '+ Add bed')));
-  if (!beds.beds.length) card.append(h('div', { class: 'empty' }, 'No beds yet. Add each raised bed, row or plot you rotate crops through.'));
+  card.append(sizingForm(settings));
+  if (!beds.beds.length) card.append(h('div', { class: 'empty' }, settings.auto_size === false
+    ? 'No beds yet. Add each raised bed, row or plot you rotate crops through.'
+    : 'No beds yet. Add the food you want on the My food page and I’ll add beds to fit, or add your own here.'));
   else {
     card.append(h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, ['Bed', 'Size', 'Type', 'Soil', 'OM', 'pH', 'Water', ''].map((c) => h('th', {}, c)))),
       h('tbody', {}, beds.beds.map((b) => h('tr', {},
-        h('td', {}, h('strong', {}, b.name), b.mulched ? h('div', { class: 'tiny' }, 'mulched') : null),
+        h('td', {}, h('strong', {}, b.name), b.mulched ? h('div', { class: 'tiny' }, 'mulched') : null,
+          b.auto ? h('div', { class: 'tiny', title: 'Added to fit your food. It goes away if it empties out; edit it to keep it.' }, 'added for your food') : null),
         h('td', {}, `${b.length_ft}×${b.width_ft} ft (${b.area_sqft} sq ft)`),
         h('td', {}, { raised: 'Raised bed', in_ground: 'In-ground', container: 'Container' }[b.kind]),
         h('td', {}, b.soil_profile.texture, h('div', { class: 'tiny' }, b.soil_profile.source)),
@@ -93,6 +98,24 @@ function bedsCard(beds) {
           h('button', { class: 'small danger', onclick: () => delBed(b) }, 'Delete')))))))));
   }
   return card;
+}
+
+function sizingForm(s) {
+  const t = s.auto_bed || { kind: 'raised', length_ft: 8, width_ft: 4 };
+  const on = h('input', { type: 'checkbox', checked: s.auto_size !== false });
+  const kind = bedKindSelect(t.kind);
+  const len = h('input', { type: 'number', min: 0.5, step: 0.5, value: t.length_ft, style: { width: '5rem' } });
+  const wid = h('input', { type: 'number', min: 0.5, step: 0.5, value: t.width_ft, style: { width: '5rem' } });
+  kind.addEventListener('change', () => { [len.value, wid.value] = BED_DEFAULTS[kind.value]; });
+  const save = h('button', { class: 'small', onclick: async () => {
+    await api('/settings', { method: 'PUT', body: { auto_size: on.checked,
+      auto_bed: { kind: kind.value, length_ft: Number(len.value) || t.length_ft, width_ft: Number(wid.value) || t.width_ft } } });
+    invalidate(); toast('Saved'); rerender();
+  } }, 'Save');
+  return h('div', { class: 'stack' },
+    h('label', { class: 'check' }, on, 'Size my garden for my food: add beds when a food doesn’t fit'),
+    h('div', { class: 'row' }, 'New beds are', kind, 'of', len, '×', wid, 'feet', save),
+    h('p', { class: 'tiny' }, 'Beds added this way are removed again if they empty out. Edit one to keep it. Turning this off keeps every bed you have.'));
 }
 
 function delBed(b) {
