@@ -405,9 +405,9 @@ def place(food: dict, p: dict, fit: dict, soils: dict, area_needed: float, ctx: 
                 if perennial:  # it stays put, so it needs the room every year of the cycle
                     for y in range(ctx.start, ctx.start + ctx.n):
                         if y != year:
-                            shift = dt.timedelta(days=round((y - year) * 365.25))
-                            free = min(free, _free_area(ctx, bed, s + shift, e + shift, y,
-                                                        tentative))
+                            ys = dates.to_date(y, plan["establish"])
+                            ye = dates.to_date(y, plan["harvest_end"])
+                            free = min(free, _free_area(ctx, bed, ys, ye, y, tentative))
                 if free + 1e-6 < min_area:
                     continue
                 score = {"good": 3, "fixable": 1, "poor": -4}[sf]

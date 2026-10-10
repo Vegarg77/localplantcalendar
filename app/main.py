@@ -625,8 +625,9 @@ def _grow(food_id: str, amount_lb: float | None) -> dict:
         for pid in json.loads(old["planting_ids"]):
             db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
         db.execute("DELETE FROM foods WHERE id = ?", (old["id"],))
+    before = {b["id"] for b in svc.beds()}
     try:
-        res, ctx, beds_added = foods.assess_sized(food_id, amount_lb)
+        res, ctx, _ = foods.assess_sized(food_id, amount_lb)
     except KeyError:
         foods.prune_auto_beds()
         raise HTTPException(404, "unknown food") from None
@@ -637,13 +638,13 @@ def _grow(food_id: str, amount_lb: float | None) -> dict:
         feed = foods.feeding_advice(ids)
         if feed:
             res["steps"].insert(-1, {"title": "Feed", "text": " ".join(feed)})
-    beds_removed = foods.prune_auto_beds()
+    foods.prune_auto_beds()
     fid = db.execute("INSERT INTO foods(food_id, amount_lb, verdict, assessment, planting_ids, "
                      "created) VALUES(?,?,?,?,?,?)",
                      (food_id, amount_lb, res["verdict"], json.dumps(res), json.dumps(ids),
                       dt.date.today().isoformat()))
     out = _food_row(db.query("SELECT * FROM foods WHERE id = ?", (fid,))[0])
-    out["beds_added"] = max(beds_added - beds_removed, 0)
+    out["beds_added"] = len({b["id"] for b in svc.beds()} - before)
     return out
 
 
