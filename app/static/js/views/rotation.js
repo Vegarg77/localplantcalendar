@@ -34,7 +34,9 @@ export async function renderRotation() {
       h('div', { class: 'text' }, 'Family spacing, feeding order, companions, bed space and winter cover all look fine.')));
   }
   const order = { high: 0, warn: 1, info: 2 };
-  for (const i of [...rot.issues].sort((a, b) => order[a.severity] - order[b.severity])) {
+  // by cycle year so the list reads left to right like the grid; most serious first within a year
+  const yr = (i) => i.cycle_year ?? Infinity;
+  for (const i of [...rot.issues].sort((a, b) => yr(a) - yr(b) || order[a.severity] - order[b.severity])) {
     issues.append(h('div', { class: 'alert' }, statusIcon(i.severity),
       h('div', { class: 'title' }, `Year ${i.cycle_year ?? '–'}`), h('div', { class: 'text' }, i.text)));
   }

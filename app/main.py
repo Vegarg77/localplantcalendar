@@ -301,6 +301,13 @@ def delete_bed(bid: int):
     return {"ok": True}
 
 
+@app.delete("/api/beds")
+def delete_all_beds():
+    n = len(svc.beds())
+    db.execute("DELETE FROM beds")   # plantings, amendments and waterings cascade
+    return {"ok": True, "beds_removed": n}
+
+
 # ----------------------------------------------------------------- plantings
 class PlantingIn(BaseModel):
     bed_id: int

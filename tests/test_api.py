@@ -120,3 +120,14 @@ def test_old_database_gets_the_auto_bed_column(tmp_path, monkeypatch):
         assert db.query("SELECT name, auto FROM beds") == [{"name": "Bed 1", "auto": 0}]
     finally:
         db.reset()
+
+
+def test_delete_all_beds(located):
+    c = located
+    a = _bed(c, name="A")
+    _bed(c, name="B")
+    c.post("/api/plantings", json={"bed_id": a["id"], "plant_id": "tomato", "cycle_year": 1})
+    r = c.delete("/api/beds").json()
+    assert r["beds_removed"] == 2
+    assert c.get("/api/beds").json()["beds"] == []
+    assert c.get("/api/plantings").json()["plantings"] == []
