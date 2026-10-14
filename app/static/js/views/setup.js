@@ -78,7 +78,9 @@ function prefsCard(s) {
 // -------------------------------------------------------------------- beds
 function bedsCard(beds, settings) {
   const card = h('div', { class: 'card stack' }, h('div', { class: 'row between' }, h('h2', {}, 'Beds'),
-    h('button', { class: 'primary', onclick: () => bedDialog(null, beds.presets) }, '+ Add bed')));
+    h('div', { class: 'row' },
+      beds.beds.length ? h('button', { class: 'danger', onclick: () => delAllBeds(beds.beds.length) }, 'Remove all beds') : null,
+      h('button', { class: 'primary', onclick: () => bedDialog(null, beds.presets) }, '+ Add bed'))));
   card.append(sizingForm(settings));
   if (!beds.beds.length) card.append(h('div', { class: 'empty' }, settings.auto_size === false
     ? 'No beds yet. Add each raised bed, row or plot you rotate crops through.'
@@ -123,6 +125,14 @@ function delBed(b) {
     { label: 'Cancel' },
     { label: 'Delete', class: 'danger', onClick: async () => {
       await api(`/beds/${b.id}`, { method: 'DELETE' }); invalidate(); rerender();
+    } }]);
+}
+
+function delAllBeds(n) {
+  modal(`Remove all ${n} bed${n === 1 ? '' : 's'}?`, h('p', {}, 'This also removes every planting, amendment and watering log. Your location, preferences and custom plants are kept.'), [
+    { label: 'Cancel' },
+    { label: 'Remove all', class: 'danger', onClick: async () => {
+      await api('/beds', { method: 'DELETE' }); invalidate(); toast('All beds removed'); rerender();
     } }]);
 }
 

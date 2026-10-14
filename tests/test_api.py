@@ -1,3 +1,6 @@
+from app import db
+
+
 def test_needs_location_first(client):
     r = client.get("/api/site")
     assert r.status_code == 409 and r.json()["code"] == "no_location"
@@ -120,3 +123,20 @@ def test_old_database_gets_the_auto_bed_column(tmp_path, monkeypatch):
         assert db.query("SELECT name, auto FROM beds") == [{"name": "Bed 1", "auto": 0}]
     finally:
         db.reset()
+
+
+def test_delete_all_beds(located):
+    c = located
+    a = _bed(c, name="A")
+    _bed(c, name="B")
+    c.post("/api/plantings", json={"bed_id": a["id"], "plant_id": "tomato", "cycle_year": 1})
+    for path, body in [("/api/amendments", {"bed_id": a["id"], "date": "04-01",
+                                            "product": "compost", "amount_lb": 10}),
+                       ("/api/waterings", {"bed_id": a["id"], "date": "2026-06-01", "inches": 1})]:
+        assert c.post(path, json=body).status_code == 200
+    assert db.query("SELECT 1 FROM amendments") and db.query("SELECT 1 FROM waterings")
+    r = c.delete("/api/beds").json()
+    assert r["beds_removed"] == 2
+    assert c.get("/api/beds").json()["beds"] == []
+    assert c.get("/api/plantings").json()["plantings"] == []
+    assert not db.query("SELECT 1 FROM amendments") and not db.query("SELECT 1 FROM waterings")
