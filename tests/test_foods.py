@@ -227,3 +227,9 @@ def test_legumes_are_not_fed(located):
     _in_ground(located)
     located.post("/api/foods/mine", json={"food_id": "pinto_beans", "amount_lb": 2})
     assert not [a for a in located.get("/api/amendments").json()["amendments"] if a["auto"]]
+
+
+def test_products_list_matches_feeding_choices(client):
+    from app import feeding
+    prods = client.get("/api/products").json()
+    assert {k for k, v in prods.items() if v["feed"]} == set(feeding.FEED_PRODUCTS)

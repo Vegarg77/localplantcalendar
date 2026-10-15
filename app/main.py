@@ -431,7 +431,8 @@ class AmendmentIn(BaseModel):
 
 @app.get("/api/products")
 def products():
-    return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3]}
+    return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3],
+                "feed": k in feeding.FEED_PRODUCTS}   # offered for planned feedings
             for k, v in nitrogen.PRODUCTS.items()}
 
 

@@ -56,9 +56,6 @@ function locationCard(settings, site, siteErr) {
 }
 
 // ------------------------------------------------------------- preferences
-const FEED_PRODUCTS = ['blood_meal', 'feather_meal', 'soybean_meal', 'cottonseed_meal', 'alfalfa_meal',
-  'organic_555', 'synthetic_101010', 'ammonium_sulfate', 'urea'];
-
 function prefsCard(s, products) {
   const risk = select([{ value: 0.1, label: 'Cautious — 10% chance of frost' }, { value: 0.3, label: 'Balanced — 30%' }, { value: 0.5, label: 'Aggressive — 50% (median dates)' }], s.frost_risk);
   const lsf = h('input', { type: 'text', placeholder: 'MM-DD', value: s.lsf_override || '', size: 6 });
@@ -66,7 +63,7 @@ function prefsCard(s, products) {
   const cyc = select(Array.from({ length: 8 }, (_, i) => ({ value: i + 1, label: `${i + 1} year${i ? 's' : ''}` })), s.cycle_years);
   const start = h('input', { type: 'number', value: s.start_year, min: 1990, max: 2200 });
   const feed = h('input', { type: 'checkbox', checked: s.auto_feed !== false });
-  const prod = select(FEED_PRODUCTS.filter((k) => products[k]).map((k) => ({ value: k, label: products[k].name })), s.feed_product || 'blood_meal');
+  const prod = select(Object.entries(products).filter(([, v]) => v.feed).map(([k, v]) => ({ value: k, label: v.name })), s.feed_product || 'blood_meal');
   return h('div', { class: 'card stack' }, h('h2', {}, 'Preferences'),
     field('Frost risk for tender crops', risk, 'How much risk you accept when setting out tomatoes, peppers, squash… Cold-hardy crops are handled separately.'),
     h('div', { class: 'form-grid' },
