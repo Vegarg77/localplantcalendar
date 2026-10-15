@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import advisor, calendar_events, dates, db, foods, nitrogen, rotation, services as svc
+from . import advisor, calendar_events, dates, db, feeding, foods, nitrogen, rotation, services as svc
 from .garden import cycle_index
 from .plant_data import FAMILY_COMMON, FAMILY_RETURN_YEARS, FROST_THRESHOLD_F, PROFILES
 from .scheduler import resolve_method
@@ -61,6 +61,8 @@ class SettingsIn(BaseModel):
     fff_override: str | None = None
     auto_size: bool | None = None
     auto_bed: AutoBedIn | None = None
+    auto_feed: bool | None = None
+    feed_product: str | None = None
 
 
 _MD = re.compile(r"^\d{2}-\d{2}$")
@@ -85,10 +87,15 @@ def put_settings(body: SettingsIn):
         if not (-90 <= float(loc.get("lat", 999)) <= 90 and
                 -180 <= float(loc.get("lon", 999)) <= 180):
             raise HTTPException(400, "location needs valid lat/lon")
+    if "feed_product" in vals and vals["feed_product"] not in feeding.FEED_PRODUCTS:
+        raise HTTPException(400, "unknown fertilizer")
     db.put_settings(vals)
     if vals.get("auto_size") is False:
         db.execute("UPDATE beds SET auto = 0")   # turning sizing off keeps the beds it made
     svc.invalidate()
+    if vals.keys() & {"location", "frost_risk", "cycle_years", "start_year", "lsf_override",
+                      "fff_override", "auto_feed", "feed_product"}:
+        feeding.refresh()
     return get_settings()
 
 
@@ -113,8 +120,11 @@ def site():
     loc = svc.location()
     clim = svc.climate()
     summary = clim.summary()
+    soil = svc.site_soil()
+    raised = svc.bed_soil({"soil": {"preset": "raised_mix"}})
+    n = nitrogen.outlook(soil, raised, clim, svc.settings().get("auto_feed") is not False)
     return {"location": loc, "climate": summary, "zone": svc.zone(),
-            "soil": svc.site_soil(), "frost_thresholds": FROST_THRESHOLD_F,
+            "soil": soil, "nitrogen": n, "frost_thresholds": FROST_THRESHOLD_F,
             "sources": SOURCES}
 
 
@@ -292,6 +302,7 @@ def update_bed(bid: int, body: BedIn):
                "initial_no3_ppm=?, notes=?, sort=?, auto=0 WHERE id=?",
                (body.name, body.length_ft, body.width_ft, body.kind, json.dumps(body.soil),
                 int(body.mulched), body.initial_no3_ppm, body.notes, body.sort, bid))
+    feeding.refresh([bid])
     return _bed_out(next(b for b in svc.beds() if b["id"] == bid))
 
 
@@ -362,23 +373,29 @@ def create_planting(body: PlantingIn):
         "INSERT INTO plantings(bed_id, plant_id, cycle_year, doy, method, area_sqft, "
         "successions, dtm_override, residue, notes) VALUES(?,?,?,?,?,?,?,?,?,?)",
         tuple(v.values()))
+    feeding.refresh([v["bed_id"]])
     return db.query("SELECT * FROM plantings WHERE id = ?", (pid,))[0]
 
 
 @app.put("/api/plantings/{pid}")
 def update_planting(pid: int, body: PlantingIn):
-    if not db.query("SELECT 1 FROM plantings WHERE id = ?", (pid,)):
+    old = db.query("SELECT bed_id FROM plantings WHERE id = ?", (pid,))
+    if not old:
         raise HTTPException(404, "unknown planting")
     v = _normalize_planting(body)
     db.execute("UPDATE plantings SET bed_id=?, plant_id=?, cycle_year=?, doy=?, method=?, "
                "area_sqft=?, successions=?, dtm_override=?, residue=?, notes=? WHERE id=?",
                (*v.values(), pid))
+    feeding.refresh({old[0]["bed_id"], v["bed_id"]})
     return db.query("SELECT * FROM plantings WHERE id = ?", (pid,))[0]
 
 
 @app.delete("/api/plantings/{pid}")
 def delete_planting(pid: int):
+    old = db.query("SELECT bed_id FROM plantings WHERE id = ?", (pid,))
     db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
+    if old:
+        feeding.refresh([old[0]["bed_id"]])
     return {"ok": True}
 
 
@@ -397,6 +414,7 @@ def set_actual(pid: int, body: ActualIn):
                "ON CONFLICT(planting_id, year) DO UPDATE SET "
                "established=COALESCE(excluded.established, actuals.established), "
                "finished=COALESCE(excluded.finished, actuals.finished)", (pid, body.year, body.established, body.finished))
+    feeding.refresh(r["bed_id"] for r in db.query("SELECT bed_id FROM plantings WHERE id = ?", (pid,)))
     return {"ok": True}
 
 
@@ -413,7 +431,8 @@ class AmendmentIn(BaseModel):
 
 @app.get("/api/products")
 def products():
-    return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3]}
+    return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3],
+                "feed": k in feeding.FEED_PRODUCTS}   # offered for planned feedings
             for k, v in nitrogen.PRODUCTS.items()}
 
 
@@ -430,12 +449,16 @@ def create_amendment(body: AmendmentIn):
                      "n_pct, notes) VALUES(?,?,?,?,?,?,?)",
                      (body.bed_id, body.cycle_year, dates.month_day_to_idx(body.date),
                       body.product, body.amount_lb, body.n_pct, body.notes))
+    feeding.refresh([body.bed_id])   # planned feedings shrink to what's still missing
     return db.query("SELECT * FROM amendments WHERE id = ?", (aid,))[0]
 
 
 @app.delete("/api/amendments/{aid}")
 def delete_amendment(aid: int):
+    row = db.query("SELECT bed_id, auto FROM amendments WHERE id = ?", (aid,))
     db.execute("DELETE FROM amendments WHERE id = ?", (aid,))
+    if row and not row[0]["auto"]:
+        feeding.refresh([row[0]["bed_id"]])
     return {"ok": True}
 
 
@@ -532,9 +555,8 @@ def calendar(year: int | None = None):
     cyc = cycle_index(year, s)
     for a in svc.amendments():
         if a["cycle_year"] == cyc:
-            prod = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
             events.append({"date": dates.to_date(year, a["doy"]).isoformat(),
-                           "type": "amend", "title": f"Apply {a['amount_lb']:g} lb {prod}",
+                           "type": "amend", "title": feeding.title(a),
                            "bed": beds.get(a["bed_id"], {}).get("name")})
     events = [e for e in events if e["date"].startswith(str(year))]
     events.sort(key=lambda e: e["date"])
@@ -642,10 +664,12 @@ def _grow(food_id: str, amount_lb: float | None) -> dict:
     if res["verdict"] in ("good", "fixable", "marginal", "partial") and res["placements"]:
         food = foods.resolve(food_id, ctx.plants)
         ids = foods.apply(res, food, ctx)
+    foods.prune_auto_beds()
+    feeding.refresh()
+    if ids:
         feed = foods.feeding_advice(ids)
         if feed:
             res["steps"].insert(-1, {"title": "Feed", "text": " ".join(feed)})
-    foods.prune_auto_beds()
     fid = db.execute("INSERT INTO foods(food_id, amount_lb, verdict, assessment, planting_ids, "
                      "created) VALUES(?,?,?,?,?,?)",
                      (food_id, amount_lb, res["verdict"], json.dumps(res), json.dumps(ids),
@@ -676,7 +700,9 @@ def delete_food(fid: int, keep_plantings: bool = False):
         for pid in json.loads(row[0]["planting_ids"]):
             db.execute("DELETE FROM plantings WHERE id = ?", (pid,))
     db.execute("DELETE FROM foods WHERE id = ?", (fid,))
-    return {"ok": True, "beds_removed": foods.prune_auto_beds()}
+    removed = foods.prune_auto_beds()
+    feeding.refresh()
+    return {"ok": True, "beds_removed": removed}
 
 
 @app.post("/api/foods/bundle/{bid}")
@@ -690,7 +716,9 @@ def grow_bundle(bid: str):
 
 @app.post("/api/rotation/cover-crops")
 def add_cover_crops():
-    return {"added": foods.fill_cover_crops()}
+    added = foods.fill_cover_crops()
+    feeding.refresh()   # legume covers cut how much feeding the next crop needs
+    return {"added": added}
 
 
 # ------------------------------------------------------------- calendar views

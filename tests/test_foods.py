@@ -169,3 +169,67 @@ def test_perennials_get_room_every_year(located):
         located.post("/api/foods/mine", json={"food_id": f, "amount_lb": amt})
     issues = located.get("/api/rotation").json()["issues"]
     assert not [i for i in issues if i["kind"] in ("space", "family")], issues
+
+
+def _in_ground(c, n=3):
+    c.put("/api/settings", json={"cycle_years": n, "auto_size": False})
+    return [c.post("/api/beds", json={"name": f"Plot {i + 1}", "kind": "in_ground",
+                                      "soil": {"om_pct": 1.5}}).json()["id"]
+            for i in range(n)]
+
+
+def test_site_warns_about_soil_nitrogen_up_front(located):
+    n = located.get("/api/site").json()["nitrogen"]
+    assert n["supply_lb_acre"] > 0 and n["raised_supply_lb_acre"] > n["supply_lb_acre"]
+    assert n["headline"] and "feedings" in n["plan"]
+
+
+def test_planner_feeds_crops_the_soil_cannot(located):
+    c = located
+    _in_ground(c)
+    r = c.post("/api/foods/mine", json={"food_id": "tomatoes", "amount_lb": 150}).json()
+    ids = r["planting_ids"]
+    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    assert feeds and {a["planting_id"] for a in feeds} <= set(ids)
+    assert any(s["title"] == "Feed" and "oz" in s["text"] for s in r["assessment"]["steps"])
+    # with the feedings in place, the model no longer projects a real shortfall
+    for bid in {a["bed_id"] for a in feeds}:
+        n = c.get(f"/api/nitrogen/{bid}").json()
+        assert all(x["deficit_lb_acre"] < 8 for x in n["crops"] if x["name"].startswith("Tomato"))
+        assert n["recommendations"][0]["kind"] == "budget"
+    cal = c.get("/api/calendar", params={"year": 2026}).json()["events"]
+    assert any(e["type"] == "amend" and "Tomato" in e["title"] for e in cal)
+
+    # your own amendment counts first, so the planned feeding shrinks
+    bid, total = feeds[0]["bed_id"], sum(a["amount_lb"] for a in feeds
+                                         if a["bed_id"] == feeds[0]["bed_id"])
+    first = min((a for a in feeds if a["bed_id"] == bid), key=lambda a: a["doy"])
+    c.post("/api/amendments", json={"bed_id": bid, "cycle_year": first["cycle_year"],
+                                    "date": "04-20", "product": "blood_meal",
+                                    "amount_lb": 0.3})
+    after = sum(a["amount_lb"] for a in c.get("/api/amendments").json()["amendments"]
+                if a["bed_id"] == bid and a["auto"])
+    assert after < total
+
+    # off switch, and feedings leave with the food
+    c.put("/api/settings", json={"auto_feed": False})
+    assert not [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    c.put("/api/settings", json={"auto_feed": True, "feed_product": "feather_meal"})
+    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    assert feeds and {a["product"] for a in feeds} == {"feather_meal"}
+    fid = c.get("/api/foods/mine").json()["foods"][0]["id"]
+    c.delete(f"/api/foods/mine/{fid}")
+    assert not [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    assert c.put("/api/settings", json={"feed_product": "compost"}).status_code == 400
+
+
+def test_legumes_are_not_fed(located):
+    _in_ground(located)
+    located.post("/api/foods/mine", json={"food_id": "pinto_beans", "amount_lb": 2})
+    assert not [a for a in located.get("/api/amendments").json()["amendments"] if a["auto"]]
+
+
+def test_products_list_matches_feeding_choices(client):
+    from app import feeding
+    prods = client.get("/api/products").json()
+    assert {k for k, v in prods.items() if v["feed"]} == set(feeding.FEED_PRODUCTS)

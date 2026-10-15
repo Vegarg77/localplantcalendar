@@ -10,7 +10,7 @@ import datetime as dt
 import hashlib
 import logging
 
-from . import dates, nitrogen, services as svc
+from . import dates, feeding, services as svc
 from .garden import cycle_index
 from .sources.http import SourceError
 
@@ -122,8 +122,7 @@ def build(start: dt.date, end: dt.date, include_forecast: bool = True) -> dict:
         cyc = cycle_index(year, s)
         for a in amends:
             if a["cycle_year"] == cyc:
-                prod = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
-                add("soil", dates.to_date(year, a["doy"]), f"Apply {a['amount_lb']:g} lb {prod}",
+                add("soil", dates.to_date(year, a["doy"]), feeding.title(a),
                     bed_id=a["bed_id"], key=f"am-{a['id']}-{year}",
                     detail=a.get("notes") or "Work it into the top few inches and water in.")
 

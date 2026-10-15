@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS amendments (
     product TEXT NOT NULL,
     amount_lb REAL NOT NULL,
     n_pct REAL,
-    notes TEXT NOT NULL DEFAULT ''
+    notes TEXT NOT NULL DEFAULT '',
+    auto INTEGER NOT NULL DEFAULT 0,
+    planting_id INTEGER REFERENCES plantings(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS waterings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +107,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "auto" not in cols:      # beds added by the planner (garden sizing)
         conn.execute("ALTER TABLE beds ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(amendments)")}
+    # each column on its own, so an interrupted upgrade still finishes next start
+    if "auto" not in cols:      # feedings the planner scheduled for a planting
+        conn.execute("ALTER TABLE amendments ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    if "planting_id" not in cols:
+        conn.execute("ALTER TABLE amendments ADD COLUMN planting_id INTEGER "
+                     "REFERENCES plantings(id) ON DELETE CASCADE")
+        conn.commit()
 
 
 def reset() -> None:
@@ -148,6 +159,8 @@ DEFAULT_SETTINGS = {
     "fff_override": None,
     "auto_size": None,         # add beds when food doesn't fit; None = not chosen yet (on)
     "auto_bed": {"kind": "raised", "length_ft": 8, "width_ft": 4},  # what it adds
+    "auto_feed": True,         # schedule feedings for crops the soil can't feed
+    "feed_product": "blood_meal",
 }
 
 

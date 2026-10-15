@@ -707,10 +707,15 @@ def apply(assessment: dict, food: dict, ctx: Ctx | None = None) -> list[int]:
 
 
 def feeding_advice(planting_ids: list[int]) -> list[str]:
-    """Run the nitrogen model on the beds that just got the crop and pull out
-    any shortfall for the new plantings."""
+    """The feedings planned for the new plantings or, with automatic feeding
+    off, any shortfall the nitrogen model projects for them."""
     if not planting_ids:
         return []
+    from . import feeding
+    planned = feeding.describe(planting_ids)
+    if planned:
+        return ["Your soil can't supply all the nitrogen this crop needs for a full "
+                "harvest, so these feedings are on your calendar:"] + planned
     rows = db.query(f"SELECT DISTINCT bed_id FROM plantings WHERE id IN "
                     f"({','.join('?' * len(planting_ids))})", tuple(planting_ids))
     out = []

@@ -11,8 +11,8 @@ export async function renderSoil(bedArg) {
     return h('div', { class: 'empty' }, 'No beds yet. ', h('a', { href: '#/setup' }, 'Add your beds'), ' to see soil and nitrogen.');
   }
   const bed = beds.beds.find((b) => b.id === Number(bedArg)) || beds.beds[0];
-  const [n, plants, amend, products] = await Promise.all([
-    cached(`/nitrogen/${bed.id}`), cached('/plants'), cached('/amendments'), cached('/products')]);
+  const [n, plants, amend, products, plantings] = await Promise.all([
+    cached(`/nitrogen/${bed.id}`), cached('/plants'), cached('/amendments'), cached('/products'), cached('/plantings')]);
   const feederOf = Object.fromEntries(plants.plants.map((p) => [p.id, p.feeder]));
   const sp = bed.soil_profile;
   const ozPer = OZ_PER_LB_ACRE(bed.area_sqft);
@@ -51,7 +51,7 @@ export async function renderSoil(bedArg) {
   const nChart = lineChart({
     x, unit: ' ppm', height: 230, yMin: 0,
     series: [{ name: 'Plant-available N', color: 'var(--s1)', area: true, values: n.series.map((p) => p.ppm) }],
-    refs: [{ y: 10, label: 'Low (<10 ppm)' }], title: 'Projected plant-available nitrogen',
+    refs: [{ y: 10, label: '10 ppm' }], title: 'Projected plant-available nitrogen',
   });
   const omChart = lineChart({
     x, unit: '%', height: 120, yFormat: (v) => f1(v),
@@ -63,6 +63,7 @@ export async function renderSoil(bedArg) {
     h('h2', {}, 'Nitrogen over your rotation'),
     h('p', { class: 'tiny' }, `Daily model over ${n.years.length} years (two passes through your ${settings.cycle_years}-year cycle): organic matter mineralises with soil temperature, crops take N up along their growth curve, legumes and residues give it back, wet months with no crop leach it. Nitrate in the top foot; 1 ppm ≈ ${f2(4 * ozPer)} oz N in this bed.`),
     h('h3', {}, 'Plant-available nitrogen (ppm NO₃-N)'), nChart,
+    h('p', { class: 'tiny' }, 'Nitrate dips while a crop grows because the crop is using it, so a line below 10 ppm is not a problem by itself. To see whether a crop got enough, check the Short column under Crops: near zero means it was fed.'),
     h('div', { class: 'legend' }, Object.values(FEEDER).map((f) => h('span', { class: 'item' }, h('span', { class: 'key', style: { background: f.color } }), f.label))),
     strip,
     h('h3', {}, 'Soil organic matter (%)'), omChart);
@@ -71,7 +72,8 @@ export async function renderSoil(bedArg) {
   const recs = h('div', { class: 'card' }, h('h2', {}, 'What to do'));
   if (!n.recommendations.length) recs.append(h('div', { class: 'alert' }, statusIcon('good'), h('div', { class: 'title' }, 'Nitrogen looks balanced'), h('div', { class: 'text' }, 'No crop is projected to run short and losses are small.')));
   for (const r of n.recommendations) {
-    recs.append(h('div', { class: 'alert' }, statusIcon(r.severity), h('div', { class: 'title' }, { deficit: 'Shortfall', leaching: 'Winter leaching', organic_matter: 'Organic matter' }[r.kind] || 'Note'), h('div', { class: 'text' }, r.text)));
+    const opts = r.options?.length ? h('ul', { class: 'text' }, r.options.map((o) => h('li', {}, o))) : null;
+    recs.append(h('div', { class: 'alert' }, statusIcon(r.severity), h('div', { class: 'title' }, { budget: 'Why it needs feeding', deficit: 'Shortfall', leaching: 'Winter leaching', organic_matter: 'Organic matter' }[r.kind] || 'Note'), h('div', { class: 'text' }, r.headline || r.text), opts));
   }
 
   // ---------------------------------------------------------- yearly table
@@ -96,13 +98,17 @@ export async function renderSoil(bedArg) {
 
   // ---------------------------------------------------------- amendments
   const mine = amend.amendments.filter((a) => a.bed_id === bed.id);
+  const plantName = Object.fromEntries(plants.plants.map((p) => [p.id, p.name]));
+  const cropOf = Object.fromEntries(plantings.plantings.map((p) => [p.id, plantName[p.plant_id] || p.plant_id]));
   const am = h('div', { class: 'card stack' }, h('h2', {}, 'Planned amendments'),
-    h('p', { class: 'tiny' }, 'Amendments repeat every cycle on the same rotation year — they feed straight into the model above.'));
+    h('p', { class: 'tiny' }, 'Amendments repeat every cycle on the same rotation year — they feed straight into the model above.'
+      + (settings.auto_feed !== false ? ' Feedings marked “planned for” are worked out from the shortfall and re-planned whenever your plan changes; anything you add yourself counts first. Turn this off in Setup → Preferences.' : '')));
   if (mine.length) {
     am.append(h('table', {}, h('tbody', {}, mine.map((a) => h('tr', {},
       h('td', {}, `Year ${a.cycle_year}, ${idxToLabel(a.doy)}`),
-      h('td', {}, `${a.amount_lb} lb ${products[a.product]?.name || a.product}`),
-      h('td', {}, h('button', { class: 'small danger', onclick: async () => {
+      h('td', {}, `${amountText(a.amount_lb)} ${products[a.product]?.name || a.product}`,
+        a.auto ? h('div', { class: 'tiny' }, `planned for ${cropOf[a.planting_id] || 'a crop'}`) : null),
+      h('td', {}, a.auto ? null : h('button', { class: 'small danger', onclick: async () => {
         await api(`/amendments/${a.id}`, { method: 'DELETE' }); invalidate(); rerender();
       } }, 'Remove')))))));
   }
@@ -115,6 +121,8 @@ export async function renderSoil(bedArg) {
     h('div', { class: 'grid grid-2' }, soilCard, recs),
     nCard, yt, h('div', { class: 'grid grid-2' }, ct, am));
 }
+
+function amountText(lb) { return lb < 1 ? `${f1(lb * 16)} oz` : `${f1(lb)} lb`; }
 
 function laneCrops(crops) {
   const lanes = [];
