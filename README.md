@@ -19,7 +19,7 @@ Under the hood it works out:
 - **How the forecast affects things**: frost, freeze and heat alerts for what's actually in the ground, plus go/wait advice on sowing (soil temperature, frost, washout rain). It also flags disease-favourable weather and re-projects harvest dates from actual temperatures.
 - **How much to water**: a per-bed watering schedule in inches and gallons, from a FAO-56 crop water balance that uses forecast evapotranspiration, rain and your soil's water-holding capacity.
 - **Your rotation**: a 1–8 year repeating cycle per bed. It checks plant-family return intervals, heavy-feeder sequencing, companion conflicts, bed space and bare winter beds.
-- **Soil and nitrogen over time**: a daily nitrogen budget across the whole cycle. It models organic-matter mineralization, crop uptake, legume fixation, residue and cover-crop release, compost and fertilizer, and winter leaching. It projects shortfalls with side-dress amounts and organic-matter trends.
+- **Soil and nitrogen over time**: a daily nitrogen budget across the whole cycle. It models organic-matter mineralization, crop uptake, legume fixation, residue and cover-crop release, compost and fertilizer, and winter leaching. It projects shortfalls and explains why a bed runs short. For each one it suggests a fix: fertilizer amounts with dates, a legume cover crop that fits the gap before the crop, and compost to build organic matter. It also tracks organic-matter trends.
 
 All data sources are free and need no account or API key.
 

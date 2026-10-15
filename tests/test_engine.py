@@ -196,6 +196,25 @@ def test_heavy_feeder_on_poor_soil_runs_short(denver):
     assert any(x["kind"] == "deficit" for x in r["recommendations"])
 
 
+def test_shortfall_explains_why_and_how_to_fix(denver):
+    tomato = _inst("tomato", dt.date(2026, 5, 20), dt.date(2026, 9, 20), area=40)
+    recs = _sim(denver, [tomato], om=1.5)["recommendations"]
+    assert recs[0]["kind"] == "budget" and "1.5% organic matter" in recs[0]["text"]
+    assert any("compost" in o for o in recs[0]["options"])
+    deficit = next(r for r in recs if r["kind"] == "deficit")
+    assert deficit["options"][0].startswith("Feed it")
+    assert any("vetch" in o or "clover" in o for o in deficit["options"])
+
+
+def test_no_cover_crop_tip_after_a_legume(denver):
+    vetch = _inst("hairy_vetch", dt.date(2025, 9, 15), dt.date(2026, 5, 1), area=40)
+    vetch.planting = {**vetch.planting, "id": 2, "residue": "incorporate"}
+    tomato = _inst("tomato", dt.date(2026, 5, 20), dt.date(2026, 9, 20), area=40)
+    recs = _sim(denver, [vetch, tomato], om=1.0)["recommendations"]
+    deficit = next(r for r in recs if r["kind"] == "deficit")
+    assert not any(o.startswith("Grow nitrogen first") for o in deficit["options"])
+
+
 def test_fertilizer_closes_the_gap(denver):
     corn = _inst("sweet_corn", dt.date(2026, 5, 15), dt.date(2026, 8, 20), area=40)
     base = _sim(denver, [corn], om=1.0)["crops"][0]["deficit_lb_acre"]
