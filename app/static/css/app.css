@@ -140,6 +140,7 @@ label.field > span { font-weight: 500; }
 .alert:first-child { border-top: 0; }
 .alert .title { font-weight: 600; }
 .alert .text { grid-column: 2; color: var(--ink-2); font-size: .9rem; }
+.alert .text + .text { margin-top: .4rem; }
 .alert ul.text { margin: .35rem 0 0; padding-left: 1.1rem; }
 .alert ul.text li + li { margin-top: .35rem; }
 .empty { color: var(--ink-2); padding: 1rem; text-align: center; border: 1px dashed var(--axis);

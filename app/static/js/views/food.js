@@ -1,7 +1,7 @@
 // Food-first home: "What do you want to eat?" -> the app works out whether and
 // how to grow it, and puts it into the rotation.
-import { api, invalidate } from '../api.js';
-import { h, fmtDate, f0, f1, statusBadge, toast, modal, field, select, errorBox } from '../ui.js';
+import { api, cached, invalidate } from '../api.js';
+import { h, fmtDate, f0, f1, statusBadge, statusIcon, toast, modal, field, select, errorBox } from '../ui.js';
 import { plantingDialog } from './planting-modal.js';
 import { rerender } from '../app.js';
 
@@ -19,7 +19,11 @@ export async function renderFood() {
   const settings = await api('/settings');
   if (!settings.location) return onboardingLocation();
   const beds = await api('/beds');
-  if (!beds.beds.length && settings.auto_size === null) return onboardingGarden();
+  if (!beds.beds.length && settings.auto_size === null) {
+    const garden = onboardingGarden();
+    const outlook = await nitrogenOutlook();
+    return outlook ? h('div', { class: 'stack' }, garden, outlook) : garden;
+  }
   const [mine, bundles] = await Promise.all([api('/foods/mine'), api('/foods/bundles')]);
 
   const box = h('div', { class: 'stack' });
@@ -48,6 +52,8 @@ export async function renderFood() {
   box.append(hero, h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Or start from a dish:'), chips));
 
   if (!mine.foods.length) {
+    const outlook = await nitrogenOutlook();
+    if (outlook) box.append(outlook);
     box.append(h('div', { class: 'empty' },
       'Tell me what you like to eat — pinto beans, salsa, french fries, strawberries… ',
       'I’ll check your climate and soil, pick varieties and dates, and fit it into your beds year after year.'));
@@ -217,6 +223,17 @@ function removeFood(item) {
       await api(`/foods/mine/${item.id}?keep_plantings=${keep.checked}`, { method: 'DELETE' });
       invalidate(); rerender();
     } }]);
+}
+
+// What the soil here can feed on its own, shown before any food is planned.
+export async function nitrogenOutlook() {
+  let site;
+  try { site = await cached('/site'); } catch { return null; }
+  const n = site.nitrogen;
+  if (!n) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'alert' },
+    statusIcon(n.needs_feeding ? 'warn' : 'good'), h('div', { class: 'title' }, n.headline),
+    h('div', { class: 'text' }, n.text), h('div', { class: 'text' }, n.plan)));
 }
 
 export async function coverCrops() {

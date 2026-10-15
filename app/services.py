@@ -201,20 +201,38 @@ def current_cycle_year() -> int:
     return cycle_index(dt.date.today().year, settings())
 
 
-def nitrogen_for_bed(bed_id: int, cycles: int = 2) -> dict:
+def nitrogen_years(cycles: int = 2) -> range:
+    s = settings()
+    years = min(max(int(s["cycle_years"]) * cycles, 2), 12)
+    return range(int(s["start_year"]) - 1, int(s["start_year"]) + years)
+
+
+def nitrogen_inputs(bed_id: int, cycles: int = 2, by_year: dict | None = None):
+    """Everything the nitrogen model needs for one bed, so callers can re-run it
+    with trial amendments: ``run(amendments) -> result``.  ``by_year`` shares
+    already-built instances (``{year: [Instance]}``) across beds."""
     s = settings()
     bed = next((b for b in beds() if b["id"] == bed_id), None)
     if not bed:
         raise KeyError(bed_id)
-    years = min(max(int(s["cycle_years"]) * cycles, 2), 12)
-    start = int(s["start_year"])
+    yrs = nitrogen_years(cycles)
+    years, start = len(yrs) - 1, yrs[1]
     insts = []
-    for y in range(start - 1, start + years):
-        insts.extend(i for i in year_instances(y) if i.planting["bed_id"] == bed_id)
+    for y in yrs:
+        ys = by_year[y] if by_year is not None else year_instances(y)
+        insts.extend(i for i in ys if i.planting["bed_id"] == bed_id)
     insts = [i for i in insts if i.end.year >= start]
-    amend = [a for a in amendments() if a["bed_id"] == bed_id]
-    return nitrogen.simulate(bed, bed_soil(bed), insts, amend, climate(), start, years, s,
-                             lambda y: cycle_index(y, s))
+    soil, clim = bed_soil(bed), climate()
+
+    def run(amend: list[dict]) -> dict:
+        return nitrogen.simulate(bed, soil, insts, amend, clim, start, years, s,
+                                 lambda y: cycle_index(y, s))
+    return bed, run
+
+
+def nitrogen_for_bed(bed_id: int, cycles: int = 2) -> dict:
+    _, run = nitrogen_inputs(bed_id, cycles)
+    return run([a for a in amendments() if a["bed_id"] == bed_id])
 
 
 def forecast_context(today: dt.date | None = None) -> dict:

@@ -11,12 +11,12 @@ export async function renderSetup() {
     try { site = await cached('/site'); } catch (e) { siteErr = e; }
   }
   const beds = await api('/beds');
-  const plants = await cached('/plants');
+  const [plants, products] = await Promise.all([cached('/plants'), cached('/products')]);
 
   return h('div', { class: 'stack' },
     h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Setup'),
       h('p', {}, 'Location, beds and preferences. Everything else is computed from free public data.'))),
-    h('div', { class: 'grid grid-2' }, locationCard(settings, site, siteErr), prefsCard(settings)),
+    h('div', { class: 'grid grid-2' }, locationCard(settings, site, siteErr), prefsCard(settings, products)),
     bedsCard(beds, settings),
     site ? climateCard(site) : null,
     site ? siteSoilCard(site) : null,
@@ -56,21 +56,29 @@ function locationCard(settings, site, siteErr) {
 }
 
 // ------------------------------------------------------------- preferences
-function prefsCard(s) {
+const FEED_PRODUCTS = ['blood_meal', 'feather_meal', 'soybean_meal', 'cottonseed_meal', 'alfalfa_meal',
+  'organic_555', 'synthetic_101010', 'ammonium_sulfate', 'urea'];
+
+function prefsCard(s, products) {
   const risk = select([{ value: 0.1, label: 'Cautious — 10% chance of frost' }, { value: 0.3, label: 'Balanced — 30%' }, { value: 0.5, label: 'Aggressive — 50% (median dates)' }], s.frost_risk);
   const lsf = h('input', { type: 'text', placeholder: 'MM-DD', value: s.lsf_override || '', size: 6 });
   const fff = h('input', { type: 'text', placeholder: 'MM-DD', value: s.fff_override || '', size: 6 });
   const cyc = select(Array.from({ length: 8 }, (_, i) => ({ value: i + 1, label: `${i + 1} year${i ? 's' : ''}` })), s.cycle_years);
   const start = h('input', { type: 'number', value: s.start_year, min: 1990, max: 2200 });
+  const feed = h('input', { type: 'checkbox', checked: s.auto_feed !== false });
+  const prod = select(FEED_PRODUCTS.filter((k) => products[k]).map((k) => ({ value: k, label: products[k].name })), s.feed_product || 'blood_meal');
   return h('div', { class: 'card stack' }, h('h2', {}, 'Preferences'),
     field('Frost risk for tender crops', risk, 'How much risk you accept when setting out tomatoes, peppers, squash… Cold-hardy crops are handled separately.'),
     h('div', { class: 'form-grid' },
       field('Your last spring frost', lsf, 'Optional local knowledge (MM-DD). Shifts the 30-year record to match.'),
       field('Your first fall frost', fff, 'Optional (MM-DD).')),
     h('div', { class: 'form-grid' }, field('Rotation cycle length', cyc, 'Years before the plan repeats (3–4 is typical).'), field('Cycle year 1 is', start)),
+    h('label', { class: 'check' }, feed, 'Plan feedings for crops my soil can’t feed on its own'),
+    field('Fertilizer to plan with', prod, 'Amounts and dates go on your calendar and into the nitrogen model. Legume cover crops, compost and amendments you add yourself count first.'),
     h('div', {}, h('button', { class: 'primary', onclick: async () => {
       await api('/settings', { method: 'PUT', body: { frost_risk: Number(risk.value), lsf_override: lsf.value || null,
-        fff_override: fff.value || null, cycle_years: Number(cyc.value), start_year: Number(start.value) } });
+        fff_override: fff.value || null, cycle_years: Number(cyc.value), start_year: Number(start.value),
+        auto_feed: feed.checked, feed_product: prod.value } });
       invalidate(); toast('Saved'); rerender();
     } }, 'Save preferences')));
 }
@@ -213,7 +221,10 @@ function siteSoilCard(site) {
   const sp = site.soil;
   return h('div', { class: 'card' }, h('h2', {}, 'Native soil at your location'),
     h('p', {}, `${sp.name || 'Soil'}: ${sp.texture}, ${f1(sp.om_pct)}% organic matter, pH ${f1(sp.ph)}, holds ${f2(sp.awc)}" of water per inch${sp.drainage ? `, ${sp.drainage.toLowerCase()}` : ''}.`),
-    h('p', { class: 'tiny' }, `Source: ${sp.source}. Used for in-ground beds; raised beds default to a compost-rich mix.`));
+    h('p', { class: 'tiny' }, `Source: ${sp.source}. Used for in-ground beds; raised beds default to a compost-rich mix.`),
+    site.nitrogen ? h('h3', {}, site.nitrogen.headline) : null,
+    site.nitrogen ? h('p', {}, site.nitrogen.text) : null,
+    site.nitrogen ? h('p', { class: 'tiny' }, site.nitrogen.plan) : null);
 }
 
 function customCard(plants) {

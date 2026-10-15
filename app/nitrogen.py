@@ -133,7 +133,8 @@ def simulate(bed: dict, soil: dict, insts: list[Instance], amendments: list[dict
     for u in uptakes:
         ends.setdefault(u.inst.end, []).append(u)
 
-    pools: list[list[float]] = []   # [remaining, daily_k, sign(+1 release / -1 immobilise)]
+    pools: list[list[float]] = []   # [remaining, daily_k, kind: +1 residue / +2 amendment
+    #                                  release, -1 immobilise]
     events, series = [], []
     yearly: dict[int, dict] = {}
 
@@ -171,7 +172,8 @@ def simulate(bed: dict, soil: dict, insts: list[Instance], amendments: list[dict
             pool[0] -= r
             if pool[2] > 0:
                 mineral += r
-                y["residue"] += r
+                if pool[2] == 1:   # amendments are already counted when applied
+                    y["residue"] += r
             else:
                 take = min(r, max(mineral - UNAVAILABLE_FLOOR, 0.0))
                 mineral -= take
@@ -185,7 +187,7 @@ def simulate(bed: dict, soil: dict, insts: list[Instance], amendments: list[dict
                 a["product"], (a["product"], a.get("n_pct") or 5.0, 0.5, 30))
             n_pct = a.get("n_pct") or n_pct_def
             n_lb_acre = a["amount_lb"] * n_pct / 100 * SQFT_PER_ACRE / max(area, 1e-6)
-            pools.append([n_lb_acre * avail, math.log(2) / half, 1])
+            pools.append([n_lb_acre * avail, math.log(2) / half, 2])
             organic += n_lb_acre * (1 - avail)
             y["amendments"] += n_lb_acre
             events.append({"date": day.isoformat(), "type": "amendment",
@@ -275,7 +277,7 @@ def simulate(bed: dict, soil: dict, insts: list[Instance], amendments: list[dict
             "short_from": u.peak_deficit_day.isoformat() if u.peak_deficit_day else None,
         })
 
-    recs = _recommendations(crops, yearly, uptakes, area, om0, settings, clim)
+    recs = _recommendations(crops, yearly, uptakes, area, om0, settings, clim, amendments)
     return {
         "bed_id": bed["id"], "bed": bed["name"], "area_sqft": area,
         "series": series, "events": events, "crops": crops,
@@ -359,7 +361,8 @@ def _grow_n_first(inst: Instance, insts: list[Instance], lsf: int, fff: int) -> 
     return None
 
 
-def _recommendations(crops, yearly, uptakes, area, om0, settings, clim) -> list[dict]:
+def _recommendations(crops, yearly, uptakes, area, om0, settings, clim,
+                     amendments=()) -> list[dict]:
     recs = []
     seen = set()
     lsf, fff = clim.anchors()
@@ -409,16 +412,23 @@ def _recommendations(crops, yearly, uptakes, area, om0, settings, clim) -> list[
             "options": options,
         })
     n_years = max(len(yearly), 1)
-    if recs:
+    fed = [a for a in amendments if a.get("auto")]
+    if recs or fed:
         demand = sum(c["demand_lb_acre"] for c in crops if not c["fixer"]) / n_years
         supply = sum(yr.get("mineralized", 0) for yr in yearly.values()) / n_years
         lost = sum(yr.get("leached", 0) for yr in yearly.values()) / n_years
         why = (f"This bed's soil ({om0:.1f}% organic matter) releases about {supply:.0f} lb "
                f"N/acre a year as it breaks down. Rain draining through it carries off "
-               f"about {lost:.0f}, and the crops planned here want about {demand:.0f}. "
-               "Low nitrogen here is a real shortfall, not a measuring error: most "
-               "vegetable beds need added nitrogen, especially in soil under 3% organic "
-               "matter or where winters are wet.")
+               f"about {lost:.0f}, and the crops planned here want about {demand:.0f}. ")
+        if recs:
+            why += ("Low nitrogen here is a real shortfall, not a measuring error: most "
+                    "vegetable beds need added nitrogen, especially in soil under 3% "
+                    "organic matter or where winters are wet.")
+        else:
+            added = sum(yr.get("amendments", 0) for yr in yearly.values()) / n_years
+            why += (f"The planned feedings and amendments (below) add about {added:.0f} lb N/acre a year "
+                    f"({lb_acre_to_bed_oz(added, area):.1f} oz of N for this bed) to make up "
+                    "the difference, so every crop gets what it needs.")
         options = []
         if om0 < 5:
             cuft = area / 12
@@ -459,3 +469,37 @@ def _recommendations(crops, yearly, uptakes, area, om0, settings, clim) -> list[
                         "year (or a cover crop turned in) holds it steady.",
             })
     return recs
+
+
+def outlook(native: dict, raised: dict, clim: Climate, auto_feed: bool = True) -> dict:
+    """What the soil at this site can feed on its own, before anything is
+    planted: an empty bed of native soil and of raised-bed mix, run for three
+    years so the starting nitrate washes out of the numbers."""
+    def bare(soil: dict) -> dict:
+        bed = {"id": 0, "name": "", "length_ft": 1, "width_ft": 1, "initial_no3_ppm": 10}
+        return simulate(bed, soil, [], [], clim, 2001, 3, {}, lambda y: 1)["years"][-1]
+
+    nat, mix = bare(native), bare(raised)
+    supply, lost = round(nat["mineralized"]), round(nat["leached"])
+    short = supply < 100
+    name = native.get("name") or "the soil survey"
+    text = (f"The native soil here ({name.split(' — ')[0]}, {native['om_pct']:.1f}% organic "
+            f"matter) releases about {supply} lb of nitrogen per acre a year as it breaks "
+            f"down, and about {lost} lb washes out in wet months when nothing is growing. "
+            "Heavy feeders such as tomatoes, sweet corn, cabbage and broccoli use 110–150 lb "
+            "a year and leafy greens about 90")
+    text += (", so in-ground beds won't reach full yields on soil nitrogen alone." if short
+             else ", so most crops will do well on soil nitrogen alone.")
+    text += (f" A compost-rich raised-bed mix releases about {round(mix['mineralized'])} lb "
+             "a year while it stays rich.")
+    if auto_feed:
+        plan = ("As you add foods, I'll plan feedings for each crop that needs them and put "
+                "them on your calendar. Cover crops, compost and anything you add yourself "
+                "count first. Change the fertilizer or turn this off in Setup → Preferences.")
+    else:
+        plan = ("Automatic feeding is off. The Soil & N page shows what each bed is short "
+                "and how to make it up.")
+    return {"supply_lb_acre": supply, "leached_lb_acre": lost,
+            "raised_supply_lb_acre": round(mix["mineralized"]), "needs_feeding": short,
+            "headline": "Your soil needs help feeding hungry crops" if short
+            else "Your soil can feed most crops", "text": text, "plan": plan}
