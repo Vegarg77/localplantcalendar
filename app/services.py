@@ -216,6 +216,7 @@ def nitrogen_inputs(bed_id: int, cycles: int = 2, by_year: dict | None = None):
     if not bed:
         raise KeyError(bed_id)
     yrs = nitrogen_years(cycles)
+    # yrs also holds the year before cycle year 1 (crops sown that fall carry in)
     years, start = len(yrs) - 1, yrs[1]
     insts = []
     for y in yrs:

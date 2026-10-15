@@ -108,8 +108,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE beds ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(amendments)")}
+    # each column on its own, so an interrupted upgrade still finishes next start
     if "auto" not in cols:      # feedings the planner scheduled for a planting
         conn.execute("ALTER TABLE amendments ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    if "planting_id" not in cols:
         conn.execute("ALTER TABLE amendments ADD COLUMN planting_id INTEGER "
                      "REFERENCES plantings(id) ON DELETE CASCADE")
         conn.commit()
