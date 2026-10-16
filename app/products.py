@@ -63,8 +63,7 @@ def _fraction(x: float, step: int) -> str:
 
 
 def _plural(n: str, word: str) -> str:
-    return f"{n} {word}" if n in ("1", "¼", "½", "¾", "⅓", "⅔") or n.startswith("0") \
-        else f"{n} {word}s"
+    return f"{n} {word}" if n in ("1", "¼", "½", "¾", "⅓", "⅔") else f"{n} {word}s"
 
 
 def measure(product: str, amount_lb: float) -> str | None:
@@ -72,21 +71,22 @@ def measure(product: str, amount_lb: float) -> str | None:
     info = INFO.get(product)
     if not info or amount_lb <= 0:
         return None
-    kind, per = info[1], info[2]
+    kind, oz_per_cup = info[1], info[2]
     if kind == "liquid":
         tbsp = max(round(amount_lb * 16 * 0.92 * 2), 1)    # ~0.92 fl oz per oz; 2 tbsp per fl oz
         return (f"about {tbsp} tablespoon{'s' if tbsp != 1 else ''} of concentrate, mixed into "
                 f"{tbsp} gallon{'s' if tbsp != 1 else ''} of water")
     if kind == "bulk":
-        cuft = amount_lb / per
+        lb_per_cuft = info[2]
+        cuft = amount_lb / lb_per_cuft
         if cuft >= 1:
             buckets = cuft / (5 * GALLON_CUFT)
             return f"about {cuft:.1f} cu ft (roughly {buckets:.0f} five-gallon buckets)"
         gal = cuft / GALLON_CUFT
         if gal >= 0.5:
             return f"about {_plural(_fraction(gal, 2), 'gallon')}"
-        per = per * GALLON_CUFT           # lb per cu ft -> oz per cup (16 cups a gallon)
-    cups = amount_lb * 16 / per
+        oz_per_cup = lb_per_cuft * GALLON_CUFT   # lb/cu ft -> lb/gal -> oz/cup (16 cups a gallon)
+    cups = amount_lb * 16 / oz_per_cup
     if cups < 0.22:
         tbsp = max(round(cups * 16), 1)
         return f"about {tbsp} tablespoon{'s' if tbsp != 1 else ''}"
