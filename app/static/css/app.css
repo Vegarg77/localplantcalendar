@@ -123,7 +123,7 @@ label.field > span { font-weight: 500; }
 .form-grid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .check { display: flex; gap: .4rem; align-items: center; font-size: .9rem; }
 .chips { display: flex; flex-wrap: wrap; gap: .35rem; }
-.chip { border: 1px solid var(--border); background: var(--surface); padding: .25rem .65rem;
+.chip { text-decoration: none; border: 1px solid var(--border); background: var(--surface); padding: .25rem .65rem;
   border-radius: 999px; font-size: .85rem; cursor: pointer; color: var(--ink-2); }
 .chip.on { background: var(--accent-wash); color: var(--accent); border-color: var(--accent); }
 .search { flex: 1; min-width: 200px; }
@@ -322,4 +322,29 @@ details > summary { cursor: pointer; }
   .mg-wx, .mg-ev-t, .mg-more, .mg-harv { display: none; }
   .mg-events { flex-direction: row; flex-wrap: wrap; gap: 3px; }
   .mg-top { justify-content: center; }
+}
+
+/* ------------------------------------------------------------ feeding plan */
+abbr.npk { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help;
+  font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.feed-list { list-style: none; margin: 0; padding: 0; }
+.feed-step { display: grid; grid-template-columns: 5.5rem 1fr; gap: .2rem .9rem;
+  padding: .75rem 0; border-top: 1px solid var(--border); }
+.feed-step:first-child { border-top: 0; }
+.feed-step .when { font-weight: 650; font-variant-numeric: tabular-nums; }
+.feed-step .when small { display: block; font-weight: 400; color: var(--muted); font-size: .75rem; }
+.feed-step .what { font-weight: 600; }
+.feed-step .amount { font-size: 1.05rem; }
+.feed-step .amount strong { color: var(--accent); }
+.feed-step .how { color: var(--ink-2); font-size: .9rem; }
+.feed-step details { font-size: .85rem; color: var(--ink-2); }
+.feed-step details summary { color: var(--accent); width: fit-content; }
+.feed-step.past { opacity: .55; }
+.explain { background: var(--surface-2); border-radius: 8px; padding: .6rem .75rem;
+  font-size: .85rem; color: var(--ink-2); }
+details.more { border-top: 1px solid var(--border); padding-top: .75rem; }
+details.more > summary { font-weight: 600; color: var(--ink); }
+details.more[open] > summary { margin-bottom: .75rem; }
+@media (max-width: 640px) {
+  .feed-step { grid-template-columns: 1fr; }
 }

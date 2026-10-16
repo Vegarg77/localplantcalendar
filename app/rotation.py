@@ -80,18 +80,25 @@ def check(beds: list[dict], plantings: list[dict], plants: dict, settings: dict,
                     })
                     break
 
-        # 2. heavy after heavy with no legume between
+        # 2. heavy after heavy with no legume between (one note per bed)
+        runs = []
         for c in range(1, n + 1):
             g = grid[bed["id"]][c]["group"]
             nxt = grid[bed["id"]][c % n + 1]["group"] if n > 1 else None
             if g == "heavy" and nxt == "heavy":
-                issues.append({
-                    "severity": "info", "kind": "sequence", "bed_id": bed["id"],
-                    "cycle_year": c % n + 1,
-                    "text": f"{bed['name']}: heavy feeders two years running (year {c} → "
-                            f"{c % n + 1}). Slip in a legume cover crop between them or plan "
-                            "extra compost — see the Soil tab for the N budget.",
-                })
+                runs.append((c, c % n + 1))
+        if runs:
+            every = len(runs) == n
+            issues.append({
+                "severity": "info", "kind": "sequence", "bed_id": bed["id"],
+                "cycle_year": runs[0][1], "years": sorted({b for _, b in runs}),
+                "text": f"{bed['name']}: "
+                        + ("hungry crops grow here every year"
+                           if every else "hungry crops grow here two years running ("
+                           + ", ".join(f"year {a} → {b}" for a, b in runs) + ")")
+                        + ", so the soil never gets a rest. A legume cover crop between "
+                          "them adds nitrogen back; the feeding plan makes up the rest.",
+            })
 
         # suggestions for the next group in sequence
         for c in range(1, n + 1):
@@ -145,7 +152,9 @@ def check(beds: list[dict], plantings: list[dict], plants: dict, settings: dict,
                                 f"({names}).",
                     })
 
-    # 5. winter cover
+    # 5. winter cover (one note for the whole garden)
+    bare_by_year: dict[int, list[str]] = {}
+    bare_beds: list[int] = []
     if winter_matters:
         for bed in beds:
             if any(pl["bed_id"] == bed["id"] and
@@ -163,14 +172,19 @@ def check(beds: list[dict], plantings: list[dict], plants: dict, settings: dict,
                            if i.planting["bed_id"] == bed["id"]):
                     bare.append(c)
             if bare:
-                issues.append({
-                    "severity": "info", "kind": "cover", "bed_id": bed["id"],
-                    "cycle_year": bare[0],
-                    "text": f"{bed['name']}: bare over winter after year"
-                            f"{'s' if len(bare) > 1 else ''} {', '.join(map(str, bare))}. A "
-                            "cover crop protects the soil and holds or adds nitrogen — use "
-                            "“Add winter cover crops” to fill these automatically.",
-                })
+                bare_beds.append(bed["id"])
+                for c in bare:
+                    bare_by_year.setdefault(c, []).append(bed["name"])
+    if bare_beds:
+        k = len(bare_beds)
+        issues.append({
+            "severity": "info", "kind": "cover", "bed_ids": bare_beds, "cycle_year": None,
+            "years": sorted(bare_by_year), "by_year": bare_by_year, "action": "cover_crops",
+            "text": f"{k} bed{'s' if k != 1 else ''} sit{'' if k != 1 else 's'} bare over "
+                    "winter. A winter cover crop protects the soil from washing away, holds "
+                    "nitrogen that rain would otherwise carry off, and legumes like crimson "
+                    "clover add more for next year.",
+        })
 
     # 6. plan dates outside the climate window
     for inst in instances:
@@ -189,4 +203,6 @@ def check(beds: list[dict], plantings: list[dict], plants: dict, settings: dict,
                         f"{inst.establish.strftime('%b %d') if inst.establish else '?'} — "
                         + "; ".join(w.replace('Warning: ', '') for w in warn),
             })
+    for i in issues:
+        i.setdefault("years", [i["cycle_year"]] if i.get("cycle_year") else [])
     return {"issues": issues, "grid": grid, "groups": GROUPS}

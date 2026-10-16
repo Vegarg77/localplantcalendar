@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable
 
-from . import dates, db, nitrogen, services as svc
+from . import dates, db, nitrogen, products, services as svc
 from .garden import cycle_index
 
 SHORT_LB_ACRE = 8.0          # the same threshold the Soil page warns at
@@ -171,13 +171,78 @@ def describe(planting_ids: list[int]) -> list[str]:
 
 
 def title(a: dict) -> str:
-    """Calendar title for an amendment, e.g. "Side-dress Tomato — 5.7 oz blood meal"."""
+    """Calendar title for an amendment, e.g.
+    "Side-dress Tomato — 5.7 oz blood meal (about 1 cup)"."""
     name = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
-    what = f"{amount_text(a['amount_lb'])} {name}"
+    cup = products.measure(a["product"], a["amount_lb"])
+    what = f"{amount_text(a['amount_lb'])} {name}" + (f" ({cup})" if cup else "")
     if a.get("auto") and a.get("notes"):
         return f"{a['notes'].split(':')[0]} — {what}"
     return f"Apply {what}"
 
 
-def amount_text(lb: float) -> str:
-    return f"{lb * 16:.1f} oz" if lb < 1 else f"{lb:.1f} lb"
+amount_text = products.amount_text
+
+WHY_FEEDER = {
+    "heavy": "{crop} is a heavy feeder: it uses more nitrogen than this bed's soil releases "
+             "on its own, so it needs a boost to grow full-sized.",
+    "medium": "{crop} uses a fair amount of nitrogen, and this bed's soil can't quite keep up "
+              "on its own.",
+    "light": "{crop} doesn't need much, but this bed runs low by the time it's growing.",
+}
+WHY_SIDE = (" Plants draw nitrogen hardest once they're growing fast, so the second feeding "
+            "goes in then instead of all at planting, where rain could wash it away first.")
+HOW_DEFAULT = {
+    "bulk": "Spread it evenly over the bed and mix it into the top few inches.",
+    "liquid": "Water it in around the plants with a watering can.",
+    "dry": "Sprinkle it evenly over the bed, scratch it into the top inch or two and water "
+           "it in.",
+}
+
+
+def plan(year: int) -> dict:
+    """Every feeding and amendment due in a calendar year, as plain steps:
+    when, which bed and crop, how much (by weight and by kitchen measure),
+    how to apply it and why."""
+    s = svc.settings()
+    cyc = cycle_index(year, s)
+    beds = {b["id"]: b for b in svc.beds()}
+    plants = svc.plants()
+    crop_of = {p["id"]: plants.get(p["plant_id"]) for p in svc.plantings()}
+    steps, used = [], {}
+    for a in svc.amendments():
+        bed = beds.get(a["bed_id"])
+        if a["cycle_year"] != cyc or not bed:
+            continue
+        crop = crop_of.get(a.get("planting_id")) if a.get("auto") else None
+        name = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
+        notes = a.get("notes") or ""
+        stage = "planting" if "at planting" in notes else \
+            "side_dress" if notes.startswith("Side-dress") else \
+            "feeding" if a.get("auto") else "amendment"
+        if a.get("auto") and crop:
+            why = WHY_FEEDER.get(crop["feeder"], WHY_FEEDER["medium"]).format(crop=crop["name"])
+            if stage == "side_dress":
+                why += WHY_SIDE
+        else:
+            why = "You planned this yourself; it counts toward what the crops here need."
+        info = products.INFO.get(a["product"])
+        how = notes.split(": ", 1)[1] if a.get("auto") and ": " in notes else \
+            notes or HOW_DEFAULT.get(info[1] if info else "dry", HOW_DEFAULT["dry"])
+        how = how[:1].upper() + how[1:]
+        steps.append({
+            "id": a["id"], "date": dates.to_date(year, a["doy"]).isoformat(),
+            "bed_id": bed["id"], "bed": bed["name"], "auto": bool(a.get("auto")),
+            "crop": crop["name"] if crop else None, "stage": stage,
+            "product": a["product"], "product_name": name.split(" (")[0],
+            "npk": products.npk_text(a["product"]),
+            "amount_lb": a["amount_lb"], "amount": amount_text(a["amount_lb"]),
+            "measure": products.measure(a["product"], a["amount_lb"]),
+            "how": how, "why": why,
+        })
+        used[a["product"]] = name.split(" (")[0]
+    steps.sort(key=lambda x: (x["date"], x["bed_id"]))
+    return {"year": year, "cycle_year": cyc, "steps": steps,
+            "products": [{"id": k, "name": v, "npk": products.npk_text(k)}
+                         for k, v in used.items()],
+            "npk_help": products.NPK_HELP}
