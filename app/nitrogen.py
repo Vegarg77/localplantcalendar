@@ -50,6 +50,9 @@ PRODUCTS = {
     "urea": ("Urea (46-0-0)", 46.0, 1.00, 3),
     "ammonium_sulfate": ("Ammonium sulfate (21-0-0)", 21.0, 1.00, 2),
     "synthetic_101010": ("Synthetic 10-10-10", 10.0, 1.00, 3),
+    # mainly for phosphorus / potassium (see pk.py)
+    "bone_meal": ("Bone meal (3-15-0)", 3.0, 0.40, 60),
+    "potassium_sulfate": ("Potassium sulfate (0-0-50)", 0.0, 0.0, 1),
 }
 
 RESIDUE_RELEASE = {

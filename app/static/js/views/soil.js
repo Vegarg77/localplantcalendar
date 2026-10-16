@@ -18,8 +18,8 @@ export async function renderSoil(bedArg) {
   const planYears = scope === 'year' ? [thisYear, thisYear + 1]
     : Array.from({ length: cyc }, (_, i) => settings.start_year + i);
   const bed = beds.beds.find((b) => b.id === Number(bedArg)) || beds.beds[0];
-  const [n, plants, amend, products, plantings, ...loaded] = await Promise.all([
-    cached(`/nitrogen/${bed.id}`), cached('/plants'), cached('/amendments'), cached('/products'), cached('/plantings'),
+  const [n, nu, plants, amend, products, plantings, ...loaded] = await Promise.all([
+    cached(`/nitrogen/${bed.id}`), cached(`/nutrients/${bed.id}?year=${thisYear}`), cached('/plants'), cached('/amendments'), cached('/products'), cached('/plantings'),
     ...planYears.map((y) => cached(`/feeding-plan?year=${y}`))]);
   const feederOf = Object.fromEntries(plants.plants.map((p) => [p.id, p.feeder]));
   const inYear = (iso) => scope === 'all' || iso.startsWith(String(thisYear));
@@ -72,6 +72,7 @@ export async function renderSoil(bedArg) {
   const soilCard = h('div', { class: 'card stack' },
     h('h2', {}, `Soil in ${bed.name}`),
     h('p', {}, soilSummary(sp)),
+    nutrientBlock(nu),
     h('details', {}, h('summary', { class: 'tiny' }, 'Soil details'),
       h('div', { class: 'facts', style: { marginTop: '.5rem' } },
         fact('Texture', `${sp.texture} (${f0(sp.sand)}% sand, ${f0(sp.silt)}% silt, ${f0(sp.clay)}% clay)`),
@@ -183,7 +184,7 @@ export async function renderSoil(bedArg) {
   am.append(h('button', { onclick: () => amendDialog(bed, settings, products) }, '+ Add compost or fertilizer'));
 
   const more = h('details', { class: 'more', open: scope === 'all' },
-    h('summary', {}, 'How we worked this out'), h('div', { class: 'stack' }, nCard, yt, ct, am));
+    h('summary', {}, 'How we worked this out'), h('div', { class: 'stack' }, nCard, yt, ct, pkTable(nu), am));
 
   return h('div', { class: 'stack' },
     h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Feeding & soil'),
@@ -198,7 +199,7 @@ export async function renderSoil(bedArg) {
 }
 
 function feedStep(st, today) {
-  const stage = { planting: 'at planting', side_dress: 'side-dress' }[st.stage];
+  const stage = { planting: 'at planting', side_dress: 'side-dress', soil_prep: 'soil prep' }[st.stage];
   return h('li', { class: `feed-step${st.date < today ? ' past' : ''}` },
     h('div', { class: 'when' }, fmtDate(st.date), h('small', {}, fmtDate(st.date, { weekday: 'short' }))),
     h('div', { class: 'stack', style: { gap: '.2rem' } },
@@ -208,6 +209,56 @@ function feedStep(st, today) {
         `${st.product_name.toLowerCase()} `, npkTag(st.npk), h('span', { class: 'tiny' }, ` (${st.amount})`)),
       h('div', { class: 'how' }, st.how),
       h('details', {}, h('summary', {}, 'Why?'), h('div', {}, st.why))));
+}
+
+// Phosphorus, potassium and pH in plain words, with what to do about them
+function nutrientBlock(nu) {
+  const LEVEL_SEV = { very_low: 'warn', low: 'warn', optimum: 'good', high: 'info', very_high: 'info' };
+  const from = { tested: 'from your soil test', assumed: 'typical for this soil mix', unknown: '' }[nu.source];
+  const line = (key, name) => {
+    const x = nu[key];
+    const val = x.ppm == null ? 'Not tested yet' : `${x.label} (${f0(x.ppm)} ppm${from ? `, ${from}` : ''})`;
+    const plan = x.planned.length
+      ? `Planned for ${nu.year}: ${x.planned.map((p) => `${p.measure || p.amount} of ${p.product.replace('_', ' ')}`).join(', ')} before planting.`
+      : x.level === 'high' || x.level === 'very_high' ? 'Nothing to add: the soil has plenty in reserve.'
+        : x.need === 0 && x.removed > 0 ? 'Your compost and feedings already cover it.' : null;
+    return h('div', { class: 'alert' }, statusIcon(x.ppm == null ? 'info' : LEVEL_SEV[x.level]),
+      h('div', { class: 'title' }, `${name}: ${val}`), h('div', { class: 'text' }, x.role),
+      plan ? h('div', { class: 'text' }, plan) : null);
+  };
+  const box = h('div', {}, line('p', 'Phosphorus'), line('k', 'Potassium'));
+  if (nu.source !== 'tested') {
+    box.append(h('div', { class: 'explain' },
+      nu.source === 'assumed'
+        ? 'These are typical levels for a compost-rich mix, not a measurement. '
+        : 'Without a soil test the plan only puts back what your crops take out. ',
+      'A soil test (about $15–30 through your county extension office) shows what this bed really has, so you don’t buy what it doesn’t need. ',
+      h('a', { href: '#/setup' }, 'Enter results'), ' under Setup → edit bed.'));
+  }
+  if (nu.ph_advice) {
+    box.append(h('div', { class: 'alert' }, statusIcon('warn'), h('div', { class: 'title' }, 'Adjust the pH'),
+      h('div', { class: 'text' }, nu.ph_advice.text)));
+  }
+  if (nu.high_p_warning) {
+    box.append(h('div', { class: 'alert' }, statusIcon('info'), h('div', { class: 'title' }, 'Plenty of phosphorus already'),
+      h('div', { class: 'text' }, 'Your fertilizer adds phosphorus this bed doesn’t need, and the extra washes into streams. A nitrogen-only feed such as blood meal (12-0-0) is a better fit; change it in Setup → Preferences.')));
+  }
+  return box;
+}
+
+function pkTable(nu) {
+  const oz = (lb) => `${f1(lb * nu.oz_per_lb_acre)} oz`;
+  const row = (key, name) => {
+    const x = nu[key];
+    return h('tr', {}, h('td', {}, name),
+      ...[x.removed, x.supplied, x.build, x.need].map((v) => h('td', { class: 'num' }, `${f0(v)}`, h('div', { class: 'tiny' }, oz(v)))));
+  };
+  return h('div', { class: 'stack' }, h('h3', {}, `Phosphorus & potassium in ${nu.year} (lb per acre)`),
+    h('div', { class: 'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {}, ['', 'Crops take out', 'Compost & feedings add', 'Build-up', 'Soil prep adds']
+        .map((c, i) => h('th', { class: i ? 'num' : '' }, c)))),
+      h('tbody', {}, row('p', 'Phosphorus (P₂O₅)'), row('k', 'Potassium (K₂O)')))),
+    h('p', { class: 'tiny' }, 'Phosphorus and potassium hardly wash out, so they’re worked out once a year instead of day by day: what the harvest carries off, plus a build-up when a soil test says low, minus what compost and feedings already bring. When a test says high, nothing is added. Ounces are for this bed.'));
 }
 
 function soilSummary(sp) {

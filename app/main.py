@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -25,7 +26,13 @@ from .sources.soil import PRESETS
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
-app = FastAPI(title="Local Plant Calendar", version="1.0")
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    feeding.upgrade()
+    yield
+
+
+app = FastAPI(title="Local Plant Calendar", version="1.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -606,6 +613,14 @@ def _feeding_tasks(today: dt.date) -> list[dict]:
 
 
 # ------------------------------------------------------------------ feeding
+@app.get("/api/nutrients/{bid}")
+def nutrients(bid: int, year: int | None = Query(None, ge=1990, le=2200)):
+    bed = next((b for b in svc.beds() if b["id"] == bid), None)
+    if not bed:
+        raise HTTPException(404, "unknown bed")
+    return feeding.bed_nutrients(bed, year or dt.date.today().year)
+
+
 @app.get("/api/feeding-plan")
 def feeding_plan(year: int | None = Query(None, ge=1990, le=2200)):
     return feeding.plan(year or dt.date.today().year)

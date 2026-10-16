@@ -600,10 +600,11 @@ def _next_bed_names(n: int) -> list[str]:
 
 def prune_auto_beds() -> int:
     """Remove beds the planner added that no longer hold anything (no
-    plantings, and nothing logged against them)."""
+    plantings, and nothing logged against them).  Planned amendments don't
+    count: the planner re-plans them from the plantings."""
     rows = db.query("SELECT id FROM beds WHERE auto = 1 AND id NOT IN "
                     "(SELECT bed_id FROM plantings) AND id NOT IN (SELECT bed_id FROM waterings) "
-                    "AND id NOT IN (SELECT bed_id FROM amendments)")
+                    "AND id NOT IN (SELECT bed_id FROM amendments WHERE auto = 0)")
     for r in rows:
         db.execute("DELETE FROM beds WHERE id = ?", (r["id"],))
     return len(rows)
