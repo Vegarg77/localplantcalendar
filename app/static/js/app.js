@@ -65,6 +65,6 @@ route();
 api('/version').then((v) => {
   const built = v.built ? new Date(v.built).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
   document.getElementById('version').replaceChildren('Plant Calendar · version ',
-    v.commit ? h('a', { href: `https://github.com/Vegarg77/localplantcalendar/commit/${v.commit}`, rel: 'noopener' }, v.version) : v.version,
+    v.commit ? h('a', { href: `https://github.com/Vegarg77/localplantcalendar/commit/${v.commit}`, target: '_blank', rel: 'noopener' }, v.version) : v.version,
     built ? ` · built ${built}` : '');
 }).catch(() => { /* footer is optional */ });
