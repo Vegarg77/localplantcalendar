@@ -1,4 +1,5 @@
 import { h, errorBox, loading } from './ui.js';
+import { api } from './api.js';
 import { renderToday } from './views/today.js';
 import { renderFood } from './views/food.js';
 import { renderPlants, renderPlant } from './views/plants.js';
@@ -59,3 +60,11 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 });
 
 route();
+
+// footer: which build is running, so an update is easy to confirm
+api('/version').then((v) => {
+  const built = v.built ? new Date(v.built).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null;
+  document.getElementById('version').replaceChildren('Plant Calendar · version ',
+    v.commit ? h('a', { href: `https://github.com/Vegarg77/localplantcalendar/commit/${v.commit}`, target: '_blank', rel: 'noopener' }, v.version) : v.version,
+    built ? ` · built ${built}` : '');
+}).catch(() => { /* footer is optional */ });

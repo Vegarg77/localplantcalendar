@@ -348,3 +348,8 @@ details.more[open] > summary { margin-bottom: .75rem; }
 @media (max-width: 640px) {
   .feed-step { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------- footer */
+.site-foot { max-width: 1200px; margin: -2.5rem auto 0; padding: 0 1rem 1.5rem; font-size: .75rem;
+  color: var(--muted); }
+.site-foot a { color: inherit; }

@@ -140,3 +140,11 @@ def test_delete_all_beds(located):
     assert c.get("/api/beds").json()["beds"] == []
     assert c.get("/api/plantings").json()["plantings"] == []
     assert not db.query("SELECT 1 FROM amendments") and not db.query("SELECT 1 FROM waterings")
+
+
+def test_version_reports_the_build(client, monkeypatch):
+    assert client.get("/api/version").json() == {"version": "dev", "commit": None, "built": None}
+    monkeypatch.setenv("APP_VERSION", "1f4b2b3c0ffee")
+    monkeypatch.setenv("APP_BUILT", "2026-10-16T19:45:00Z")
+    v = client.get("/api/version").json()
+    assert v == {"version": "1f4b2b3", "commit": "1f4b2b3c0ffee", "built": "2026-10-16T19:45:00Z"}
