@@ -596,7 +596,8 @@ def _feeding_tasks(today: dt.date) -> list[dict]:
     for year in sorted({today.year, (today + dt.timedelta(14)).year}):
         for st in feeding.plan(year)["steps"]:
             if lo <= st["date"] <= hi:
-                what = f"{st['amount']} {st['product_name'].lower()}" +                     (f" ({st['measure']})" if st["measure"] else "")
+                what = (f"{st['amount']} {st['product_name'].lower()}"
+                        + (f" ({st['measure']})" if st["measure"] else ""))
                 out.append({"date": st["date"], "kind": "feed", "bed": st["bed"],
                             "title": (f"Feed {st['crop']}" if st["crop"] else
                                       f"Add {st['product_name'].lower()}"),

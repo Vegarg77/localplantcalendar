@@ -228,7 +228,7 @@ def plan(year: int) -> dict:
             why = "You planned this yourself; it counts toward what the crops here need."
         info = products.INFO.get(a["product"])
         how = notes.split(": ", 1)[1] if a.get("auto") and ": " in notes else \
-            notes or HOW_DEFAULT[info[1] if info else "dry"]
+            notes or HOW_DEFAULT.get(info[1] if info else "dry", HOW_DEFAULT["dry"])
         how = how[:1].upper() + how[1:]
         steps.append({
             "id": a["id"], "date": dates.to_date(year, a["doy"]).isoformat(),
