@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import advisor, calendar_events, dates, db, feeding, foods, nitrogen, rotation, services as svc
+from . import products as products_mod
 from .garden import cycle_index
 from .plant_data import FAMILY_COMMON, FAMILY_RETURN_YEARS, FROST_THRESHOLD_F, PROFILES
 from .scheduler import resolve_method
@@ -432,6 +433,7 @@ class AmendmentIn(BaseModel):
 @app.get("/api/products")
 def products():
     return {k: {"name": v[0], "n_pct": v[1], "available": v[2], "half_life_days": v[3],
+                "npk": products_mod.npk_text(k),
                 "feed": k in feeding.FEED_PRODUCTS}   # offered for planned feedings
             for k, v in nitrogen.PRODUCTS.items()}
 
@@ -579,10 +581,33 @@ def get_forecast():
     t = dates.doy(today)
     normals = {"high": round(float(clim.tmax[t]), 1), "low": round(float(clim.tmin[t]), 1),
                "soil": round(float(clim.soil[t]), 1)}
+    advice = {**advice, "tasks": sorted(advice["tasks"] + _feeding_tasks(today),
+                                        key=lambda t: t["date"])}
     return {"days": [d for d in fc["days"] if d["date"] >= (today - dt.timedelta(7)).isoformat()],
             "today": today.isoformat(), "normals": normals, **advice,
             "watering": watering,
             "plant_now": advisor.plant_now(svc.engine(), list(svc.plants().values()), today)}
+
+
+def _feeding_tasks(today: dt.date) -> list[dict]:
+    """Feedings due in the next two weeks, for the Today page."""
+    lo, hi = (today - dt.timedelta(3)).isoformat(), (today + dt.timedelta(14)).isoformat()
+    out = []
+    for year in sorted({today.year, (today + dt.timedelta(14)).year}):
+        for st in feeding.plan(year)["steps"]:
+            if lo <= st["date"] <= hi:
+                what = f"{st['amount']} {st['product_name'].lower()}" +                     (f" ({st['measure']})" if st["measure"] else "")
+                out.append({"date": st["date"], "kind": "feed", "bed": st["bed"],
+                            "title": (f"Feed {st['crop']}" if st["crop"] else
+                                      f"Add {st['product_name'].lower()}"),
+                            "text": f"{what}. {st['how']}"})
+    return out
+
+
+# ------------------------------------------------------------------ feeding
+@app.get("/api/feeding-plan")
+def feeding_plan(year: int | None = Query(None, ge=1990, le=2200)):
+    return feeding.plan(year or dt.date.today().year)
 
 
 # ------------------------------------------------------------------ nitrogen

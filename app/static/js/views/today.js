@@ -45,7 +45,7 @@ export async function renderToday() {
   for (const t of fc.tasks) {
     const sev = t.kind === 'plant' ? (t.verdict === 'go' ? 'good' : 'warn') : 'info';
     const label = t.kind === 'plant' ? (t.verdict === 'go' ? 'Go' : 'Wait') :
-      { indoor: 'Indoors', harden: 'Harden off', harvest: 'Harvest', terminate: 'Cover crop' }[t.kind];
+      { indoor: 'Indoors', harden: 'Harden off', harvest: 'Harvest', terminate: 'Cover crop', feed: 'Feed' }[t.kind];
     const row = h('div', { class: 'alert' }, statusBadge(sev, label),
       h('div', { class: 'title' }, `${fmtDay(t.date)} — ${t.title}${t.bed ? ` (${t.bed})` : ''}`),
       h('div', { class: 'text' }, t.text));
@@ -82,16 +82,19 @@ export async function renderToday() {
 
   // -------------------------------------------------------------- watering
   const water = h('div', { class: 'card stack' }, h('h2', {}, 'Watering'),
-    h('p', { class: 'tiny' }, 'FAO-56 water balance: crop water use (ET₀ × crop coefficient) minus rain, using your soil’s water-holding capacity. Log waterings for better accuracy; otherwise it assumes you watered when due.'));
+    h('p', { class: 'tiny' }, 'Worked out from how much water your crops use in this weather, minus the rain, for your soil. Log waterings for better advice; otherwise it assumes you watered when due.'));
   if (!fc.watering.length) water.append(h('p', { class: 'muted' }, 'Add beds on the Setup page to get watering advice.'));
-  for (const w of fc.watering) {
+  // beds with nothing growing share one line instead of a row each
+  const idle = fc.watering.filter((w) => w.available_water_pct === null);
+  if (idle.length) {
+    water.append(h('p', { class: 'muted' }, `Nothing growing in ${idle.map((w) => w.bed).join(', ')} right now, so no watering needed there.`));
+  }
+  for (const w of fc.watering.filter((x) => x.available_water_pct !== null)) {
     const pct = w.available_water_pct;
     const row = h('div', { class: 'stack', style: { borderTop: '1px solid var(--border)', paddingTop: '.6rem' } },
       h('div', { class: 'row between' }, h('strong', {}, w.bed),
         h('button', { class: 'small', onclick: () => logWater(w) }, 'Log watering')));
-    if (pct === null) {
-      row.append(h('div', { class: 'muted' }, 'Nothing growing right now — no watering needed.'));
-    } else {
+    {
       row.append(h('div', { class: 'row' }, h('div', { class: 'meter', style: { flex: 1 } },
         h('div', { style: { width: `${Math.max(0, Math.min(100, pct))}%` } })),
       h('span', { class: 'num' }, `${pct}% of available water left`)));

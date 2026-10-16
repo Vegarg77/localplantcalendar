@@ -497,7 +497,7 @@ def outlook(native: dict, raised: dict, clim: Climate, auto_feed: bool = True) -
                 "them on your calendar. Cover crops, compost and anything you add yourself "
                 "count first. Change the fertilizer or turn this off in Setup → Preferences.")
     else:
-        plan = ("Automatic feeding is off. The Soil & N page shows what each bed is short "
+        plan = ("Automatic feeding is off. The Feeding & soil page shows what each bed is short "
                 "and how to make it up.")
     return {"supply_lb_acre": supply, "leached_lb_acre": lost,
             "raised_supply_lb_acre": round(mix["mineralized"]), "needs_feeding": short,

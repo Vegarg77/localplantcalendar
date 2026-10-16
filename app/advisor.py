@@ -21,7 +21,7 @@ def _d(s: str) -> dt.date:
 
 
 def _fmt(d: dt.date) -> str:
-    return d.strftime("%a %b %-d")
+    return f"{d:%a %b} {d.day}"
 
 
 def advise(insts: list[Instance], forecast: dict, clim: Climate,

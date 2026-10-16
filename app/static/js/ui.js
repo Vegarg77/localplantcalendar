@@ -164,6 +164,32 @@ export function showTip(evt, head, rows) {
 }
 export function hideTip() { tip().hidden = true; }
 
+// --------------------------------------------------------- this year / all
+// One preference for every page: show this season only (the default, easier
+// for new gardeners) or the whole multi-year rotation.
+export function getScope() {
+  try { return localStorage.getItem('scope') === 'all' ? 'all' : 'year'; } catch { return 'year'; }
+}
+export function scopeToggle(cycleYears, onChange) {
+  const cur = getScope();
+  const pick = (v) => (e) => {
+    e.preventDefault();
+    if (v === cur) return;
+    try { localStorage.setItem('scope', v); } catch { /* storage unavailable */ }
+    onChange(v);
+  };
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'How much of the plan to show' },
+    h('a', { href: '#', class: cur === 'year' ? 'on' : '', 'aria-pressed': String(cur === 'year'), onclick: pick('year') }, 'This year'),
+    h('a', { href: '#', class: cur === 'all' ? 'on' : '', 'aria-pressed': String(cur === 'all'), onclick: pick('all') },
+      `Full ${cycleYears}-year plan`));
+}
+
+// "12-0-0" with its meaning on hover / long-press
+export const NPK_HELP = 'The three numbers on a fertilizer label are its N-P-K: the percent nitrogen (N), phosphorus (P) and potassium (K), always in that order.';
+export function npkTag(npk) {
+  return npk ? h('abbr', { class: 'npk', title: `N-P-K ${npk}. ${NPK_HELP}` }, npk) : null;
+}
+
 // Feeder groups are the categorical identity used across rotation views,
 // assigned in fixed palette order.
 export const FEEDER = {

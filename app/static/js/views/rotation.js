@@ -1,5 +1,5 @@
 import { api, cached, invalidate } from '../api.js';
-import { h, fmtDate, FEEDER, statusIcon, select, toast } from '../ui.js';
+import { h, fmtDate, FEEDER, statusIcon, select, toast, getScope, scopeToggle } from '../ui.js';
 import { plantingDialog } from './planting-modal.js';
 import { coverCrops } from './food.js';
 import { rerender } from '../app.js';
@@ -16,29 +16,49 @@ export async function renderRotation() {
   };
   yearsSel.onchange = save; startIn.onchange = save;
 
+  const scope = getScope();
+  const cur = rot.current_cycle_year;
+  const thisYear = rot.start_year + cur - 1;
+  const shown = scope === 'year' ? [cur] : Array.from({ length: n }, (_, i) => i + 1);
+  const toggle = scopeToggle(n, rerender);
+
   const head = h('div', { class: 'page-head' },
-    h('div', {}, h('h1', {}, 'Rotation plan'),
-      h('p', {}, `Each bed follows a ${n}-year cycle that repeats. Year 1 = ${rot.start_year}; this year is cycle year ${rot.current_cycle_year}.`)),
-    h('div', { class: 'row' }, yearsSel, h('label', { class: 'check' }, 'Year 1 is', startIn),
-      h('button', { onclick: coverCrops }, 'Add winter cover crops'),
+    h('div', {}, h('h1', {}, scope === 'year' ? `What grows where in ${thisYear}` : 'Rotation plan'),
+      h('p', {}, scope === 'year'
+        ? `Your beds this season. Crops move to a different bed each year so the soil gets a rest and pests lose track of them; switch to the full ${n}-year plan to see or change later years.`
+        : `Each bed follows a ${n}-year cycle that repeats. Year 1 = ${rot.start_year}; this year is cycle year ${cur}.`)),
+    h('div', { class: 'row' }, toggle,
+      scope === 'all' ? [yearsSel, h('label', { class: 'check' }, 'Year 1 is', startIn)] : null,
       h('button', { class: 'primary', onclick: () => plantingDialog({ onSaved: rerender }) }, 'Add planting')));
 
   const legend = h('div', { class: 'legend' }, Object.values(FEEDER).map((f) =>
     h('span', { class: 'item' }, h('span', { class: 'key', style: { background: f.color } }), f.label)),
   h('span', { class: 'tiny' }, 'Classic sequence: legumes → heavy feeders → leafy → roots → legumes.'));
 
-  // issues
-  const issues = h('div', { class: 'card' }, h('h2', {}, 'Rotation check'));
-  if (!rot.issues.length) {
+  // issues: only this season's unless the whole plan is shown
+  const KIND = { family: 'Same crop family too soon', sequence: 'Hungry crops back to back',
+    companion: 'Bad neighbors', space: 'Bed overfilled', cover: 'Bare over winter', timing: 'Timing' };
+  const relevant = rot.issues.filter((i) => scope === 'all' || !i.years.length || i.years.includes(cur));
+  const issues = h('div', { class: 'card' }, h('h2', {}, scope === 'year' ? `Things to check for ${thisYear}` : 'Rotation check'));
+  if (!relevant.length) {
     issues.append(h('div', { class: 'alert' }, statusIcon('good'), h('div', { class: 'title' }, rot.rows.length ? 'No problems found' : 'Add beds and crops to check your rotation'),
-      h('div', { class: 'text' }, 'Family spacing, feeding order, companions, bed space and winter cover all look fine.')));
+      h('div', { class: 'text' }, 'Crop families, feeding order, neighbors, bed space and winter cover all look fine.')));
   }
   const order = { high: 0, warn: 1, info: 2 };
-  // by cycle year so the list reads left to right like the grid; most serious first within a year
+  // most serious first, then in rotation order
   const yr = (i) => i.cycle_year ?? Infinity;
-  for (const i of [...rot.issues].sort((a, b) => yr(a) - yr(b) || order[a.severity] - order[b.severity])) {
+  for (const i of [...relevant].sort((a, b) => order[a.severity] - order[b.severity] || yr(a) - yr(b))) {
+    let text = i.text;
+    if (i.kind === 'cover' && scope === 'year') {
+      const names = i.by_year[cur] || [];
+      text = `${names.length} bed${names.length === 1 ? '' : 's'} (${names.join(', ')}) will sit bare this winter. `
+        + 'A winter cover crop keeps the soil from washing away, holds nitrogen that rain would carry off, and legumes like crimson clover add more for next year.';
+    }
+    const title = KIND[i.kind] || 'Note';
     issues.append(h('div', { class: 'alert' }, statusIcon(i.severity),
-      h('div', { class: 'title' }, `Year ${i.cycle_year ?? '–'}`), h('div', { class: 'text' }, i.text)));
+      h('div', { class: 'title' }, scope === 'all' && i.cycle_year ? `${title} · year ${i.cycle_year}` : title),
+      h('div', { class: 'text' }, text),
+      i.action === 'cover_crops' ? h('div', { class: 'text' }, h('button', { class: 'small', onclick: coverCrops }, 'Add winter cover crops')) : null));
   }
 
   // grid
@@ -46,20 +66,20 @@ export async function renderRotation() {
     return h('div', { class: 'stack' }, head, h('div', { class: 'empty' }, 'No beds yet. ',
       h('a', { href: '#/setup' }, 'Add your beds'), ' on the Setup page, then plan what grows in each one, year by year.'));
   }
-  const cols = `minmax(140px, 170px) repeat(${n}, minmax(190px, 1fr))`;
+  const cols = `minmax(140px, 170px) repeat(${shown.length}, minmax(190px, 1fr))`;
   const grid = h('div', { class: 'rot' },
     h('div', { class: 'rot-head', style: { gridTemplateColumns: cols } }, h('div', {}, 'Bed'),
-      Array.from({ length: n }, (_, i) => h('div', {}, `Year ${i + 1} · ${rot.start_year + i}`,
-        i + 1 === rot.current_cycle_year ? ' (now)' : ''))));
+      shown.map((c) => h('div', {}, scope === 'year' ? `${rot.start_year + c - 1}` : `Year ${c} · ${rot.start_year + c - 1}`,
+        scope === 'all' && c === cur ? ' (now)' : ''))));
   for (const row of rot.rows) {
     const b = row.bed;
     const r = h('div', { class: 'rot-row', style: { gridTemplateColumns: cols } },
       h('div', { class: 'rot-bed' }, h('strong', {}, b.name),
         h('div', { class: 'tiny' }, `${b.length_ft}×${b.width_ft} ft · ${b.area_sqft} sq ft`),
         h('div', { class: 'tiny' }, `${b.soil_profile.texture}, ${b.soil_profile.om_pct}% OM`),
-        h('a', { class: 'tiny', href: `#/soil/${b.id}` }, 'Nitrogen →')));
-    for (const cell of row.cells) {
-      const c = h('div', { class: `rot-cell${cell.cycle_year === rot.current_cycle_year ? ' current' : ''}` });
+        h('a', { class: 'tiny', href: `#/soil/${b.id}` }, 'Soil & feeding →')));
+    for (const cell of row.cells.filter((x) => shown.includes(x.cycle_year))) {
+      const c = h('div', { class: `rot-cell${scope === 'all' && cell.cycle_year === cur ? ' current' : ''}` });
       for (const pl of cell.plantings) {
         const inst = pl.instances.find((x) => x.year === cell.calendar_year) || pl.instances[0];
         const when = inst ? `${fmtDate(inst.establish || inst.start)} → ${fmtDate(inst.harvest_end)}` : '';
@@ -80,5 +100,5 @@ export async function renderRotation() {
   }
 
   return h('div', { class: 'stack' }, head, legend, h('div', { class: 'card', style: { overflowX: 'auto' } }, grid), issues,
-    h('p', { class: 'tiny' }, 'Tip: plant a winter cover crop (cereal rye, hairy vetch, crimson clover) after your last harvest — it holds nitrogen over winter and legumes add more for next year. See the Soil & N tab for the numbers.'));
+    h('p', { class: 'tiny' }, 'Tip: plant a winter cover crop (cereal rye, hairy vetch, crimson clover) after your last harvest — it holds nitrogen over winter and legumes add more for next year.'));
 }
