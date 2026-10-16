@@ -219,7 +219,7 @@ function nutrientBlock(nu) {
     const x = nu[key];
     const val = x.ppm == null ? 'Not tested yet' : `${x.label} (${f0(x.ppm)} ppm${from ? `, ${from}` : ''})`;
     const plan = x.planned.length
-      ? `Planned for ${nu.year}: ${x.planned.map((p) => `${p.measure || p.amount} of ${p.product.replace('_', ' ')}`).join(', ')} before planting.`
+      ? `Planned for ${nu.year}: ${x.planned.map((p) => `${p.measure || p.amount} of ${p.product.replaceAll('_', ' ')}`).join(', ')} before planting.`
       : x.level === 'high' || x.level === 'very_high' ? 'Nothing to add: the soil has plenty in reserve.'
         : x.need === 0 && x.removed > 0 ? 'Your compost and feedings already cover it.' : null;
     return h('div', { class: 'alert' }, statusIcon(x.ppm == null ? 'info' : LEVEL_SEV[x.level]),

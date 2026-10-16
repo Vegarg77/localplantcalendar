@@ -41,10 +41,10 @@ def product(settings: dict) -> str:
 def upgrade() -> None:
     """Re-plan once after an update that changes what gets planned (version 2
     added phosphorus/potassium soil prep), so existing gardens pick it up."""
-    rows = db.query("SELECT value FROM settings WHERE key = 'plan_version'")
-    if rows and json.loads(rows[0]["value"]) >= PLAN_VERSION:
-        return
     try:
+        rows = db.query("SELECT value FROM settings WHERE key = 'plan_version'")
+        if rows and int(json.loads(rows[0]["value"])) >= PLAN_VERSION:
+            return
         refresh()
     except Exception:  # noqa: BLE001 — e.g. weather source down; retry next start
         log.exception("re-planning feedings after the update failed; will retry")
