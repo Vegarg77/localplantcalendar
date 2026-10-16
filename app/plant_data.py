@@ -247,6 +247,20 @@ PROFILES: dict[str, dict] = {
 }
 
 # Minimum years before the same family should return to the same bed.
+# P2O5 / K2O a harvest carries off (lb/acre), from extension crop-removal tables
+# at garden-scale yields.  Cover crops go back into the soil, so remove nothing.
+PK_REMOVAL = {
+    "warm_fruit": (35, 160), "cucurbit": (30, 120), "warm_legume": (25, 70),
+    "cool_legume": (20, 60), "brassica_tp": (40, 150), "brassica_fast": (20, 80),
+    "leafy": (25, 120), "root": (35, 150), "allium": (25, 90), "warm_direct": (40, 100),
+    "herb_warm": (15, 60), "herb_cool": (15, 60), "herb_perennial": (10, 40),
+    "perennial_veg": (25, 80), "fruit": (20, 80), "flower_warm": (15, 60),
+    "flower_cool": (15, 60), "cover_winter": (0, 0), "cover_summer": (0, 0),
+}
+for _name, _prof in PROFILES.items():
+    _prof.setdefault("p_remove", PK_REMOVAL[_name][0])
+    _prof.setdefault("k_remove", PK_REMOVAL[_name][1])
+
 FAMILY_RETURN_YEARS = {
     "Solanaceae": 3, "Brassicaceae": 3, "Amaryllidaceae": 3,
     "Cucurbitaceae": 2, "Apiaceae": 2, "Amaranthaceae": 2, "Fabaceae": 2,
@@ -1025,7 +1039,12 @@ LOOSE_SOIL = {"carrot", "parsnip", "potato", "sweet_potato", "peanut", "radish",
               "onion_sets", "leek", "beet", "rutabaga", "turnip", "ginger", "avocado"}
 CONTAINER_OK = {"fig", "lemon", "orange", "rosemary", "banana", "lemongrass", "mint",
                 "strawberry", "blueberry", "olive", "pomegranate", "avocado", "artichoke"}
+# crops that carry off notably more than their profile (tubers are mostly potassium)
+PK_OVERRIDES = {"potato": (60, 230), "sweet_potato": (40, 200), "tomato": (35, 180),
+                "paste_tomato": (35, 180), "winter_squash": (35, 160), "cabbage": (40, 170)}
 for _p in _PLANTS:
+    if _p["id"] in PK_OVERRIDES:
+        _p["p_remove"], _p["k_remove"] = PK_OVERRIDES[_p["id"]]
     _p["zone"] = ZONES.get(_p["id"])
     _p["soil_pref"] = "loose" if _p["id"] in LOOSE_SOIL else "any"
     _p["container_ok"] = _p["id"] in CONTAINER_OK

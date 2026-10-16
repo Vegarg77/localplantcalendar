@@ -15,9 +15,11 @@ planting.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 from collections.abc import Iterable
 
-from . import dates, db, nitrogen, products, services as svc
+from . import dates, db, nitrogen, pk, products, services as svc
 from .garden import cycle_index
 
 SHORT_LB_ACRE = 8.0          # the same threshold the Soil page warns at
@@ -26,11 +28,29 @@ FEED_PRODUCTS = ("blood_meal", "feather_meal", "soybean_meal", "cottonseed_meal"
                  "urea")
 SKIP_CATEGORIES = {"cover", "flower"}
 PASSES = 3
+PLAN_VERSION = 2   # bump when the planner learns a new kind of planned amendment
+
+log = logging.getLogger("plantcal.feeding")
 
 
 def product(settings: dict) -> str:
     p = settings.get("feed_product") or "blood_meal"
     return p if p in FEED_PRODUCTS else "blood_meal"
+
+
+def upgrade() -> None:
+    """Re-plan once after an update that changes what gets planned (version 2
+    added phosphorus/potassium soil prep), so existing gardens pick it up."""
+    try:
+        rows = db.query("SELECT value FROM settings WHERE key = 'plan_version'")
+        if rows and int(json.loads(rows[0]["value"])) >= PLAN_VERSION:
+            return
+        refresh()
+    except Exception:  # noqa: BLE001 — e.g. weather source down; retry next start
+        log.exception("re-planning feedings after the update failed; will retry")
+        return
+    db.execute("INSERT INTO settings(key, value) VALUES('plan_version', ?) "
+               "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(PLAN_VERSION),))
 
 
 def refresh(bed_ids: Iterable[int] | None = None) -> None:
@@ -86,6 +106,46 @@ def _plan_bed(bed_id: int, by_year: dict) -> None:
             "notes, auto, planting_id) VALUES(?,?,?,?,?,?,?,1,?)",
             (bed_id, f["cycle_year"], f["doy"], prod, round(f["amount_lb"], 3), None,
              f["notes"], f["planting_id"]))
+    _plan_pk(bed, by_year, s)
+
+
+SOIL_PREP = ("Soil prep: spread it evenly over the bed a week or two before planting, mix it "
+             "into the top 6 inches and water it in.")
+
+
+def bed_year(bed: dict, by_year: dict, s: dict, cyc: int) -> tuple[list, list[dict]]:
+    """This bed's crops in rotation year ``cyc`` and the amendments that count
+    toward its phosphorus and potassium (everything except planned soil prep)."""
+    year = int(s["start_year"]) + cyc - 1
+    insts = [i for i in by_year.get(year, []) if i.planting["bed_id"] == bed["id"]
+             and i.year == year]
+    amends = [a for a in svc.amendments() if a["bed_id"] == bed["id"]
+              and a["cycle_year"] == cyc and not is_soil_prep(a)]
+    return insts, amends
+
+
+def is_soil_prep(a: dict) -> bool:
+    return bool(a.get("auto")) and a.get("planting_id") is None         and a["product"] in pk.SOURCE.values()
+
+
+def _plan_pk(bed: dict, by_year: dict, s: dict) -> None:
+    """Phosphorus and potassium for each rotation year, put down once before
+    the first crop goes in."""
+    area = bed["length_ft"] * bed["width_ft"]
+    for cyc in range(1, int(s["cycle_years"]) + 1):
+        insts, amends = bed_year(bed, by_year, s, cyc)
+        if not insts:
+            continue
+        st = pk.status(bed, insts, amends, int(s["cycle_years"]))
+        first = min(i.start for i in insts) - dt.timedelta(days=14)
+        for n in pk.NUTRIENTS:
+            if st[n]["need"] < pk.MIN_LB_ACRE:
+                continue
+            db.execute(
+                "INSERT INTO amendments(bed_id, cycle_year, doy, product, amount_lb, n_pct, "
+                "notes, auto, planting_id) VALUES(?,?,?,?,?,?,?,1,NULL)",
+                (bed["id"], cycle_index(first.year, s), dates.doy(first), pk.SOURCE[n],
+                 round(pk.amount_lb(n, st[n]["need"], area), 3), None, SOIL_PREP))
 
 
 def _merge(feeds: list[dict], days: int = 10) -> list[dict]:
@@ -200,6 +260,29 @@ HOW_DEFAULT = {
 }
 
 
+def bed_nutrients(bed: dict, year: int) -> dict:
+    """Phosphorus, potassium and pH for a bed in a calendar year: soil-test
+    level, what the crops remove, what's added, and lime/sulfur advice."""
+    s = svc.settings()
+    cyc = cycle_index(year, s)
+    by_year = {int(s["start_year"]) + cyc - 1: svc.year_instances(int(s["start_year"]) + cyc - 1)}
+    insts, amends = bed_year(bed, by_year, s, cyc)
+    st = pk.status(bed, insts, amends, int(s["cycle_years"]))
+    area = bed["length_ft"] * bed["width_ft"]
+    prep = [a for a in svc.amendments() if a["bed_id"] == bed["id"]
+            and a["cycle_year"] == cyc and is_soil_prep(a)]
+    for n in pk.NUTRIENTS:
+        st[n]["planned"] = [{"product": a["product"], "amount": amount_text(a["amount_lb"]),
+                             "measure": products.measure(a["product"], a["amount_lb"])}
+                            for a in prep if a["product"] == pk.SOURCE[n]]
+    soil = svc.bed_soil(bed)
+    return {**st, "year": year, "cycle_year": cyc, "bed_id": bed["id"],
+            "oz_per_lb_acre": area / nitrogen.SQFT_PER_ACRE * 16,
+            "ph": soil.get("ph"), "ph_advice": pk.ph_advice(soil, area),
+            "high_p_warning": (st["p"]["level"] in ("high", "very_high")
+                               and (products.npk(product(s)) or (0, 0, 0))[1] > 0)}
+
+
 def plan(year: int) -> dict:
     """Every feeding and amendment due in a calendar year, as plain steps:
     when, which bed and crop, how much (by weight and by kitchen measure),
@@ -209,7 +292,7 @@ def plan(year: int) -> dict:
     beds = {b["id"]: b for b in svc.beds()}
     plants = svc.plants()
     crop_of = {p["id"]: plants.get(p["plant_id"]) for p in svc.plantings()}
-    steps, used = [], {}
+    steps, used, nutr = [], {}, {}
     for a in svc.amendments():
         bed = beds.get(a["bed_id"])
         if a["cycle_year"] != cyc or not bed:
@@ -217,10 +300,16 @@ def plan(year: int) -> dict:
         crop = crop_of.get(a.get("planting_id")) if a.get("auto") else None
         name = nitrogen.PRODUCTS.get(a["product"], (a["product"],))[0]
         notes = a.get("notes") or ""
-        stage = "planting" if "at planting" in notes else \
+        stage = "soil_prep" if is_soil_prep(a) else \
+            "planting" if "at planting" in notes else \
             "side_dress" if notes.startswith("Side-dress") else \
             "feeding" if a.get("auto") else "amendment"
-        if a.get("auto") and crop:
+        if stage == "soil_prep":
+            if bed["id"] not in nutr:
+                nutr[bed["id"]] = bed_nutrients(bed, year)
+            n = next(k for k, v in pk.SOURCE.items() if v == a["product"])
+            why = pk.why(n, nutr[bed["id"]])
+        elif a.get("auto") and crop:
             why = WHY_FEEDER.get(crop["feeder"], WHY_FEEDER["medium"]).format(crop=crop["name"])
             if stage == "side_dress":
                 why += WHY_SIDE

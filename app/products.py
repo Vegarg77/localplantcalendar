@@ -31,6 +31,8 @@ INFO = {
     "urea":             ((46.0, 0.0, 0.0), "dry", 6.5),
     "ammonium_sulfate": ((21.0, 0.0, 0.0), "dry", 8.0),
     "synthetic_101010": ((10.0, 10.0, 10.0), "dry", 8.5),
+    "bone_meal":        ((3.0, 15.0, 0.0), "dry", 5.5),
+    "potassium_sulfate": ((0.0, 0.0, 50.0), "dry", 10.0),
 }
 
 NPK_HELP = ("The three numbers on a fertilizer label (like 12-0-0) are its N-P-K: the "

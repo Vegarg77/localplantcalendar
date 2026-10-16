@@ -189,7 +189,7 @@ def test_planner_feeds_crops_the_soil_cannot(located):
     _in_ground(c)
     r = c.post("/api/foods/mine", json={"food_id": "tomatoes", "amount_lb": 150}).json()
     ids = r["planting_ids"]
-    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"] and a["planting_id"]]
     assert feeds and {a["planting_id"] for a in feeds} <= set(ids)
     assert any(s["title"] == "Feed" and "oz" in s["text"] for s in r["assessment"]["steps"])
     # with the feedings in place, the model no longer projects a real shortfall
@@ -208,14 +208,14 @@ def test_planner_feeds_crops_the_soil_cannot(located):
                                     "date": "04-20", "product": "blood_meal",
                                     "amount_lb": 0.3})
     after = sum(a["amount_lb"] for a in c.get("/api/amendments").json()["amendments"]
-                if a["bed_id"] == bid and a["auto"])
+                if a["bed_id"] == bid and a["auto"] and a["planting_id"])
     assert after < total
 
     # off switch, and feedings leave with the food
     c.put("/api/settings", json={"auto_feed": False})
     assert not [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
     c.put("/api/settings", json={"auto_feed": True, "feed_product": "feather_meal"})
-    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"]]
+    feeds = [a for a in c.get("/api/amendments").json()["amendments"] if a["auto"] and a["planting_id"]]
     assert feeds and {a["product"] for a in feeds} == {"feather_meal"}
     fid = c.get("/api/foods/mine").json()["foods"][0]["id"]
     c.delete(f"/api/foods/mine/{fid}")
@@ -223,10 +223,10 @@ def test_planner_feeds_crops_the_soil_cannot(located):
     assert c.put("/api/settings", json={"feed_product": "compost"}).status_code == 400
 
 
-def test_legumes_are_not_fed(located):
+def test_legumes_are_not_fed_nitrogen(located):
     _in_ground(located)
     located.post("/api/foods/mine", json={"food_id": "pinto_beans", "amount_lb": 2})
-    assert not [a for a in located.get("/api/amendments").json()["amendments"] if a["auto"]]
+    assert not [a for a in located.get("/api/amendments").json()["amendments"] if a["auto"] and a["planting_id"]]
 
 
 def test_products_list_matches_feeding_choices(client):

@@ -152,16 +152,20 @@ function bedDialog(b, presets) {
   const num = (v, ph) => h('input', { type: 'number', step: 'any', value: v ?? '', placeholder: ph });
   const om = num(soil.om_pct, 'auto'), ph = num(soil.ph, 'auto');
   const sand = num(soil.sand, 'auto'), silt = num(soil.silt, 'auto'), clay = num(soil.clay, 'auto');
+  const pPpm = num(soil.p_ppm, 'not tested'), kPpm = num(soil.k_ppm, 'not tested');
   const no3 = num(b?.initial_no3_ppm ?? 10, '10');
   const mulch = h('input', { type: 'checkbox', checked: !!b?.mulched });
   const body = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('Name', name), field('Length (ft)', len), field('Width (ft)', wid), field('Type', kind)),
     field('Soil', preset, 'Native soil comes from the USDA soil survey for your location; raised-bed mix assumes topsoil + compost.'),
-    h('details', { open: !!(soil.om_pct || soil.ph || soil.sand) }, h('summary', {}, 'Soil test results (optional)'),
+    h('details', { open: !!(soil.om_pct || soil.ph || soil.sand || soil.p_ppm || soil.k_ppm) }, h('summary', {}, 'Soil test results (optional)'),
       h('div', { class: 'form-grid', style: { marginTop: '.5rem' } },
         field('Organic matter %', om), field('pH', ph), field('Sand %', sand), field('Silt %', silt), field('Clay %', clay),
+        field('Phosphorus, P (ppm)', pPpm), field('Potassium, K (ppm)', kPpm),
         field('Nitrate-N (ppm)', no3, 'Starting point for the nitrogen model')),
-      h('p', { class: 'tiny' }, 'Your state extension service runs inexpensive soil tests (~$15–30).')),
+      h('p', { class: 'tiny' }, 'Your county extension office runs inexpensive soil tests (~$15–30); ask for a standard garden test. '
+        + 'Enter phosphorus and potassium as ppm (Mehlich-3, the usual method). If your report gives lb/acre, divide by 2. '
+        + 'With these, the feeding plan builds up what’s low and skips what you already have plenty of.')),
     h('label', { class: 'check' }, mulch, 'Mulched (straw, leaves, wood chips) — reduces evaporation'));
   modal(b ? `Edit ${b.name}` : 'Add bed', body, [
     { label: 'Cancel' },
@@ -169,6 +173,7 @@ function bedDialog(b, presets) {
       const s = { preset: preset.value };
       const put = (k, el) => { if (el.value !== '') s[k] = Number(el.value); };
       put('om_pct', om); put('ph', ph); put('sand', sand); put('silt', silt); put('clay', clay);
+      put('p_ppm', pPpm); put('k_ppm', kPpm);
       const payload = { name: name.value || 'Bed', length_ft: Number(len.value), width_ft: Number(wid.value),
         kind: kind.value, soil: s, mulched: mulch.checked, initial_no3_ppm: Number(no3.value || 10) };
       await api(b ? `/beds/${b.id}` : '/beds', { method: b ? 'PUT' : 'POST', body: payload });
