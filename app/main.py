@@ -76,6 +76,14 @@ class SettingsIn(BaseModel):
 _MD = re.compile(r"^\d{2}-\d{2}$")
 
 
+@app.get("/api/version")
+def version():
+    """Which build is running (commit and build time are stamped into the image by CI)."""
+    sha = os.environ.get("APP_VERSION") or "dev"
+    return {"version": sha[:7], "commit": sha if sha != "dev" else None,
+            "built": os.environ.get("APP_BUILT") or None}
+
+
 @app.get("/api/settings")
 def get_settings():
     s = svc.settings()

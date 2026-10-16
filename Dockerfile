@@ -1,6 +1,11 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# stamped by CI so the page footer shows which build is running
+ARG GIT_SHA=dev
+ARG BUILD_TIME=
+ENV APP_VERSION=$GIT_SHA \
+    APP_BUILT=$BUILD_TIME \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PLANTCAL_DB=/data/plantcal.db
 

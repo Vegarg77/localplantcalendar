@@ -23,9 +23,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build time
+        id: built
+        run: echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ghcr.io/vegarg77/localplantcalendar:latest
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.built.outputs.time }}
+          tags: |
+            ghcr.io/vegarg77/localplantcalendar:latest
+            ghcr.io/vegarg77/localplantcalendar:sha-${{ github.sha }}
